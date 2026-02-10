@@ -50,7 +50,7 @@ let edgesCache = {
 global.cachedEdges = []
 
 /* ================= UTILITIES ================= */
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
+const sleep = ms => new Promise(r => setTimeout(r, ms))
 
 function getConfidenceGrade(prob) {
   if (prob >= 0.65) return 'A+'
@@ -129,15 +129,17 @@ async function buildEdges() {
       if (!Array.isArray(games) || games.length < 5) continue
 
       const statFn = statFnMap[prop.propType]
-      if (!statFn) continue
+      if (typeof statFn !== 'function') continue
 
       const { hitRate } = calculateHitRate(games, statFn, prop.line)
-      if (!hitRate || hitRate < 0.55) continue
+      if (!hitRate || hitRate < 0.48) continue
 
-      let prob = adjustProbability(
-        hitRate,
-        defenseRanks[prop.opponent]?.[prop.propType] ?? 15
-      )
+      const defenseRank =
+        prop.opponent && defenseRanks[prop.opponent]?.[prop.propType]
+          ? defenseRanks[prop.opponent][prop.propType]
+          : 30 // neutral fallback
+
+      let prob = adjustProbability(hitRate, defenseRank)
 
       prob = adjustForLocation(
         prob,
@@ -161,16 +163,15 @@ async function buildEdges() {
       await sleep(150)
     }
 
-    edgesCache = {
-      data: edges,
-      timestamp: Date.now(),
-      building: false
-    }
-
+    edgesCache.data = edges
+    edgesCache.timestamp = Date.now()
     global.cachedEdges = edges
+
+    console.log(`✅ Edges built: ${edges.length}`)
   } catch (err) {
-    edgesCache.building = false
     console.error('❌ Edge build failed:', err.message)
+  } finally {
+    edgesCache.building = false
   }
 }
 
@@ -178,11 +179,14 @@ async function buildEdges() {
 app.get('/api/edges/today', (_, res) => {
   const now = Date.now()
 
-  if (edgesCache.data.length && now - edgesCache.timestamp < EDGES_TTL) {
+  if (
+    edgesCache.data.length &&
+    now - edgesCache.timestamp < EDGES_TTL
+  ) {
     return res.json(edgesCache.data)
   }
 
-  buildEdges() // background refresh
+  buildEdges() // async background refresh
   res.json(edgesCache.data)
 })
 
@@ -202,9 +206,11 @@ app.get('/api/prizepicks/slips', (req, res) => {
   res.json(slip)
 })
 
-/* ================= BACKGROUND REFRESH ================= */
+/* ================= SAFE BACKGROUND REFRESH ================= */
 setInterval(() => {
-  buildEdges().catch(() => {})
+  if (!edgesCache.building) {
+    buildEdges()
+  }
 }, 60 * 60 * 1000)
 
 /* ================= START ================= */
