@@ -3,27 +3,92 @@
 <head>
   <meta charset="UTF-8" />
   <title>BeatsEdge</title>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #0f0f0f;
+      color: #eaeaea;
+      padding: 20px;
+    }
+
+    h1 {
+      margin-bottom: 10px;
+    }
+
+    button {
+      padding: 10px 16px;
+      margin-bottom: 20px;
+      font-size: 16px;
+      cursor: pointer;
+    }
+
+    .edge-card {
+      background: #1c1c1c;
+      border-radius: 6px;
+      padding: 12px;
+      margin-bottom: 10px;
+      border-left: 4px solid #4caf50;
+    }
+
+    .empty {
+      opacity: 0.7;
+    }
+  </style>
 </head>
 <body>
 
   <h1>BeatsEdge</h1>
   <button id="load">Load Edges</button>
-  <pre id="output"></pre>
+
+  <!-- FIX: container exists -->
+  <div id="edges"></div>
 
   <script>
-    // 🔴 THIS IS STEP 9 — DO NOT CHANGE
-    const API_BASE =
-      window.location.hostname.includes('railway.app')
-        ? 'https://beatsedge-api-production-ed84.up.railway.app'
-        : 'http://localhost:3000'
+    const button = document.getElementById('load')
+    const container = document.getElementById('edges')
 
-    // TEST FETCH
-    document.getElementById('load').addEventListener('click', async () => {
-      const res = await fetch(`${API_BASE}/api/edges/today`)
-      const data = await res.json()
-      document.getElementById('output').textContent =
-        JSON.stringify(data, null, 2)
-    })
+    async function loadEdges() {
+      container.innerHTML = '<p class="empty">Loading…</p>'
+
+      try {
+        const res = await fetch('/api/edges/today')
+        const edges = await res.json()
+
+        container.innerHTML = ''
+
+        if (!Array.isArray(edges) || edges.length === 0) {
+          container.innerHTML = '<p class="empty">No edges available yet.</p>'
+          return
+        }
+
+        edges.forEach(edge => {
+          const div = document.createElement('div')
+          div.className = 'edge-card'
+
+          div.innerHTML = `
+            <strong>${edge.player}</strong><br>
+            ${edge.propType.replaceAll('_', ' ')} @ ${edge.line}<br>
+            Prob: ${(edge.modelProb * 100).toFixed(1)}%<br>
+            Grade: ${edge.confidence}
+          `
+
+          container.appendChild(div)
+        })
+      } catch (err) {
+        container.innerHTML = '<p class="empty">Failed to load edges.</p>'
+        console.error(err)
+      }
+    }
+
+    // Button click
+    button.addEventListener('click', loadEdges)
+
+    // Initial load
+    loadEdges()
+
+    // Auto-refresh every 60s
+    setInterval(loadEdges, 60000)
   </script>
 
 </body>

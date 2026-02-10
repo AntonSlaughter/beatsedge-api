@@ -1,59 +1,34 @@
-const fetch = require('node-fetch')
+const fs = require('fs')
 
-const STAT_MAP = {
-  'Points': 'player_points',
-  'Rebounds': 'player_rebounds',
-  'Assists': 'player_assists',
-  'Pts+Rebs+Asts': 'player_points_rebounds_assists',
-  'Pts+Rebs': 'player_points_rebounds',
-  'Pts+Asts': 'player_points_assists',
-  'Rebs+Asts': 'player_rebounds_assists',
-  'Fantasy Score': 'player_fantasy_points'
-}
+const fetch = (...args) =>
+  import('node-fetch').then(({ default: fetch }) => fetch(...args))
 
-async function fetchPrizePicksProps() {
-  const res = await fetch('https://api.prizepicks.com/projections', {
-    headers: {
-      'User-Agent': 'Mozilla/5.0',
-      'Accept': 'application/json'
-    }
-  })
+console.log('🟡 Script started')
+
+async function run() {
+  console.log('🟡 Fetching PrizePicks projections...')
+
+  const res = await fetch('https://static.prizepicks.com/projections.json')
+
+  console.log('🟡 HTTP STATUS:', res.status)
+
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}`)
+  }
 
   const json = await res.json()
 
-  const included = json.included || []
-  const players = {}
+  console.log('🟢 JSON LOADED')
+  console.log('🟢 DATA LENGTH:', json.data?.length)
 
-  // Build player lookup
-  for (const item of included) {
-    if (item.type === 'new_player') {
-      players[item.id] = item.attributes?.display_name
-    }
-  }
+  fs.writeFileSync(
+    'prizepicksProps.json',
+    JSON.stringify(json, null, 2)
+  )
 
-  const props = []
-
-  for (const proj of json.data) {
-    const attrs = proj.attributes
-    if (!attrs?.today || attrs.status !== 'pre_game') continue
-
-    const playerId = proj.relationships?.new_player?.data?.id
-    const playerName = players[playerId]
-    if (!playerName) continue
-
-    const propType = STAT_MAP[attrs.stat_display_name]
-    if (!propType) continue
-
-    props.push({
-      player: playerName,
-      propType,
-      line: Number(attrs.line_score),
-      opponent: attrs.description?.split('/')[1] || null
-    })
-  }
-
-  console.log(`✅ Parsed PrizePicks props: ${props.length}`)
-  return props
+  console.log('✅ FILE SAVED: prizepicksProps.json')
 }
 
-module.exports = { fetchPrizePicksProps }
+run().catch(err => {
+  console.error('❌ SCRIPT FAILED:', err.message)
+})

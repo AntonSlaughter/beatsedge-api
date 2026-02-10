@@ -6,16 +6,17 @@ const path = require('path')
 const { execFile } = require('child_process')
 
 /* ================= INTERNAL MODULES ================= */
-const { fetchPrizePicksProps } = require('./prizePicksFetcher')
+// NOTE: single, correct fetcher path
+const { fetchPrizePicksProps } = require('./scripts/fetchPrizePicksLocal')
 const { calculateHitRate } = require('./hitRateEngine')
 const { adjustProbability } = require('./defenseAdjuster')
 const { adjustForLocation } = require('./locationAdjuster')
 const { adjustForMinutes } = require('./minutesAdjuster')
 const { buildPrizePicksSlip } = require('./prizePicksSlipBuilder')
+const { resolvePlayerId } = require('./playerResolver')
 
 /* ================= DATA ================= */
 const defenseRanks = require('./defenseRanks.json')
-const playerMap = require('./playerMap.json')
 
 /* ================= APP SETUP ================= */
 const app = express()
@@ -25,12 +26,11 @@ const PORT = process.env.PORT || 8080
 app.use(express.json())
 app.use(express.static(path.join(__dirname, 'public')))
 
-/* ================= ROOT ================= */
+/* ================= ROUTES ================= */
 app.get('/', (_, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'))
 })
 
-/* ================= HEALTH ================= */
 app.get('/api/health', (_, res) => {
   res.json({ status: 'ok' })
 })
@@ -61,8 +61,12 @@ function getConfidenceGrade(prob) {
 }
 
 /* ================= NBA STATS (PYTHON) ================= */
-function getPlayerGames(playerId, count = 10) {
-  const cached = playerGameCache[playerId]
+// IMPORTANT FIX:
+// nba_stats.py expects (player_name, game_count)
+// NOT a numeric playerId
+function getPlayerGames(playerName, count = 10) {
+  const cacheKey = `${playerName}:${count}`
+  const cached = playerGameCache[cacheKey]
   const now = Date.now()
 
   if (cached && now - cached.timestamp < PLAYER_TTL) {
@@ -71,25 +75,24 @@ function getPlayerGames(playerId, count = 10) {
 
   return new Promise((resolve, reject) => {
     execFile(
-      'python3',
-      [path.join(__dirname, 'nba_stats.py'), playerId, count.toString()],
+      'python',
+      [
+        path.join(__dirname, 'nba_stats.py'),
+        String(playerName),
+        String(count)
+      ],
       (err, stdout) => {
         if (err) {
           console.error('❌ PYTHON ERROR:', err.message)
           return reject(err)
         }
 
-        if (!stdout) {
-          return reject(new Error('Empty NBA stats output'))
-        }
-
         try {
           const games = JSON.parse(stdout)
-          playerGameCache[playerId] = { games, timestamp: now }
+          playerGameCache[cacheKey] = { games, timestamp: now }
           resolve(games)
         } catch (e) {
-          console.error('❌ BAD NBA JSON:', stdout)
-          reject(e)
+          reject(new Error('Invalid NBA stats JSON'))
         }
       }
     )
@@ -100,9 +103,8 @@ function getPlayerGames(playerId, count = 10) {
 app.get('/api/player-props', async (_, res) => {
   try {
     const props = await fetchPrizePicksProps()
-    console.log('📊 PrizePicks props fetched:', props.length)
     res.json(props)
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Failed to fetch PrizePicks props' })
   }
 })
@@ -128,55 +130,37 @@ async function buildEdges() {
       player_rebounds_assists: g => g.rebounds + g.assists
     }
 
-    for (const prop of props.slice(0, 10)) {
+    for (const prop of props.slice(0, 15)) {
       console.log('➡️ PROP:', prop.player, prop.propType, prop.line)
 
-      if (!prop.player || !prop.propType || prop.line == null) {
-        console.log('❌ INVALID PROP')
-        continue
-      }
+      if (!prop.player || !prop.propType || prop.line == null) continue
 
-      console.log('🗺️ MAP CHECK:', prop.player, '→', playerMap[prop.player])
-
-      const playerId = playerMap[prop.player]
+      // Resolve once for validation/logging (optional)
+      const playerId = await resolvePlayerId(prop.player)
       if (!playerId) {
-        console.log('❌ PLAYER NOT FOUND IN MAP:', prop.player)
+        console.log('❌ PLAYER RESOLVE FAILED:', prop.player)
         continue
       }
 
-      const games = await getPlayerGames(playerId, 10)
-
-      if (!Array.isArray(games)) {
-        console.log('❌ NBA GAMES INVALID:', prop.player)
-        continue
-      }
-
+      const games = await getPlayerGames(prop.player, 10)
       console.log(`📊 NBA games fetched for ${prop.player}:`, games.length)
 
-      if (games.length < 2) {
+      if (!Array.isArray(games) || games.length < 3) {
         console.log('❌ NOT ENOUGH GAMES:', prop.player)
         continue
       }
 
       const statFn = statFnMap[prop.propType]
-      if (!statFn) {
-        console.log('❌ STAT FUNCTION MISSING:', prop.propType)
-        continue
-      }
+      if (!statFn) continue
 
       const { hitRate } = calculateHitRate(games, statFn, prop.line)
       console.log('🎯 HIT RATE:', prop.player, hitRate)
 
-      if (!hitRate || hitRate < 0.48) {
-        console.log('❌ HIT RATE TOO LOW')
-        continue
-      }
+      if (!hitRate || hitRate < 0.48) continue
 
-      const defenseRank =
-        defenseRanks[prop.opponent]?.[prop.propType] ?? 30
+      const defenseRank = defenseRanks[prop.opponent]?.[prop.propType] ?? 30
 
       let prob = adjustProbability(hitRate, defenseRank)
-
       prob = adjustForLocation(prob, games[0]?.isHome === true)
 
       const avgMinutes =
@@ -194,7 +178,7 @@ async function buildEdges() {
       })
 
       console.log('✅ EDGE ADDED:', prop.player)
-      await sleep(150)
+      await sleep(120)
     }
 
     edgesCache.data = edges
@@ -213,10 +197,7 @@ async function buildEdges() {
 app.get('/api/edges/today', (_, res) => {
   const now = Date.now()
 
-  if (
-    edgesCache.data.length &&
-    now - edgesCache.timestamp < EDGES_TTL
-  ) {
+  if (edgesCache.data.length && now - edgesCache.timestamp < EDGES_TTL) {
     return res.json(edgesCache.data)
   }
 
@@ -240,11 +221,9 @@ app.get('/api/prizepicks/slips', (req, res) => {
   res.json(slip)
 })
 
-/* ================= SAFE BACKGROUND REFRESH ================= */
+/* ================= BACKGROUND REFRESH ================= */
 setInterval(() => {
-  if (!edgesCache.building) {
-    buildEdges()
-  }
+  if (!edgesCache.building) buildEdges()
 }, 60 * 60 * 1000)
 
 /* ================= START ================= */
