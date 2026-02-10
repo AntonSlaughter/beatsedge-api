@@ -72,7 +72,7 @@ function getPlayerGames(playerName, count = 10) {
 
   return new Promise((resolve, reject) => {
     execFile(
-      'python',
+      'python3',
       [
         path.join(__dirname, 'nba_stats.py'),
         String(playerName),
