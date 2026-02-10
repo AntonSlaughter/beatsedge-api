@@ -1,9 +1,11 @@
 require('dotenv').config()
 
+/* ================= CORE IMPORTS ================= */
 const express = require('express')
 const path = require('path')
 const { execFile } = require('child_process')
 
+/* ================= INTERNAL MODULES ================= */
 const { fetchPrizePicksProps } = require('./prizePicksFetcher')
 const { calculateHitRate } = require('./hitRateEngine')
 const { adjustProbability } = require('./defenseAdjuster')
@@ -11,24 +13,29 @@ const { adjustForLocation } = require('./locationAdjuster')
 const { adjustForMinutes } = require('./minutesAdjuster')
 const { buildPrizePicksSlip } = require('./prizePicksSlipBuilder')
 
+/* ================= DATA ================= */
 const defenseRanks = require('./defenseRanks.json')
 const playerMap = require('./playerMap.json')
 
+/* ================= APP SETUP ================= */
 const app = express()
 const PORT = process.env.PORT || 3000
 
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'))
-})
 /* ================= MIDDLEWARE ================= */
 app.use(express.json())
 app.use(express.static(path.join(__dirname, 'public')))
+
+/* ================= ROOT ================= */
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'))
+})
 
 /* ================= CACHE ================= */
 const PLAYER_TTL = 10 * 60 * 1000
 const EDGES_TTL = 5 * 60 * 1000
 
 const playerGameCache = {}
+
 let edgesCache = {
   data: [],
   timestamp: 0,
@@ -37,8 +44,8 @@ let edgesCache = {
 
 global.cachedEdges = []
 
-/* ================= UTILS ================= */
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+/* ================= UTILITIES ================= */
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
 function getConfidenceGrade(prob) {
   if (prob >= 0.65) return 'A+'
@@ -68,6 +75,7 @@ function getPlayerGames(playerId, count = 10) {
       [path.join(__dirname, 'nba_stats.py'), playerId, count],
       (err, stdout) => {
         if (err) return reject(err)
+
         try {
           const games = JSON.parse(stdout)
           playerGameCache[playerId] = { games, timestamp: now }
@@ -84,14 +92,14 @@ function getPlayerGames(playerId, count = 10) {
 app.get('/api/player-props', async (_, res) => {
   try {
     const props = await fetchPrizePicksProps()
-    console.log('TOTAL PrizePicks props:', props.length)
+    console.log('📊 PrizePicks props:', props.length)
     res.json(props)
   } catch {
     res.status(500).json({ error: 'Failed to fetch PrizePicks props' })
   }
 })
 
-/* ================= EDGE BUILDER (CORE) ================= */
+/* ================= EDGE BUILDER ================= */
 async function buildEdges() {
   if (edgesCache.building) return
   edgesCache.building = true
@@ -100,9 +108,21 @@ async function buildEdges() {
     const props = await fetchPrizePicksProps()
     const edges = []
 
-    console.log('🔨 Building edges from props:', props.length)
+    console.log('🔨 Building edges from:', props.length)
 
     const MAX_PROPS = 60
+
+    const statFnMap = {
+      player_points: g => g.points,
+      player_rebounds: g => g.rebounds,
+      player_assists: g => g.assists,
+      player_threes: g => g.threes,
+      player_points_rebounds_assists: g => g.points + g.rebounds + g.assists,
+      player_points_rebounds: g => g.points + g.rebounds,
+      player_points_assists: g => g.points + g.assists,
+      player_rebounds_assists: g => g.rebounds + g.assists,
+      player_fantasy_points: g => g.fantasy
+    }
 
     for (const prop of props.slice(0, MAX_PROPS)) {
       if (!prop.player || !prop.propType || prop.line == null) continue
@@ -113,24 +133,9 @@ async function buildEdges() {
       const games = await getPlayerGames(playerId, 10)
       if (!Array.isArray(games) || games.length < 5) continue
 
-      /* ✅ SAFE STAT FUNCTION MAP */
-      const statFnMap = {
-        player_points: g => g.points,
-        player_rebounds: g => g.rebounds,
-        player_assists: g => g.assists,
-        player_threes: g => g.threes,
-        player_points_rebounds_assists: g =>
-          g.points + g.rebounds + g.assists,
-        player_points_rebounds: g => g.points + g.rebounds,
-        player_points_assists: g => g.points + g.assists,
-        player_rebounds_assists: g => g.rebounds + g.assists,
-        player_fantasy_points: g => g.fantasy
-      }
-
       const statFn = statFnMap[prop.propType]
-      if (typeof statFn !== 'function') continue
+      if (!statFn) continue
 
-      /* ✅ CORRECT calculateHitRate USAGE */
       const { hitRate } = calculateHitRate(games, statFn, prop.line)
       if (!hitRate || hitRate < 0.55) continue
 
@@ -169,7 +174,7 @@ async function buildEdges() {
 
     global.cachedEdges = edges
 
-    console.log('✅ TOTAL EDGES BUILT:', edges.length)
+    console.log('✅ Edges built:', edges.length)
   } catch (err) {
     edgesCache.building = false
     console.error('❌ Edge build failed:', err.message)
@@ -177,13 +182,10 @@ async function buildEdges() {
 }
 
 /* ================= EDGE API ================= */
-app.get('/api/edges/today', async (_, res) => {
+app.get('/api/edges/today', (_, res) => {
   const now = Date.now()
 
-  if (
-    edgesCache.data.length &&
-    now - edgesCache.timestamp < EDGES_TTL
-  ) {
+  if (edgesCache.data.length && now - edgesCache.timestamp < EDGES_TTL) {
     return res.json(edgesCache.data)
   }
 
@@ -208,10 +210,10 @@ app.get('/api/prizepicks/slips', (req, res) => {
 })
 
 /* ================= AUTO REFRESH ================= */
-setInterval(buildEdges, 60 * 60 * 1000) // hourly
-buildEdges() // initial warmup
+setInterval(buildEdges, 60 * 60 * 1000)
+buildEdges()
 
 /* ================= START ================= */
-app.listen(PORT, () => {
-  console.log(`🚀 BeatsEdge running → http://localhost:${PORT}`)
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 BeatsEdge running on port ${PORT}`)
 })
