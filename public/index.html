@@ -3,37 +3,28 @@
 <head>
   <meta charset="UTF-8" />
   <title>BeatsEdge</title>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      background: #0f172a;
-      color: #e5e7eb;
-      padding: 20px;
-    }
-    button {
-      padding: 10px 16px;
-      margin-right: 10px;
-      cursor: pointer;
-    }
-    pre {
-      background: #020617;
-      padding: 15px;
-      max-height: 400px;
-      overflow: auto;
-    }
-  </style>
 </head>
 <body>
 
-  <h1>🎯 BeatsEdge</h1>
+  <h1>BeatsEdge</h1>
+  <button id="load">Load Edges</button>
+  <pre id="output"></pre>
 
-  <button onclick="loadProps()">Load Props</button>
-  <button onclick="loadEdges()">Build Edges</button>
-  <button onclick="loadSlip()">Build Slip (2)</button>
+  <script>
+    // 🔴 THIS IS STEP 9 — DO NOT CHANGE
+    const API_BASE =
+      window.location.hostname.includes('railway.app')
+        ? 'https://beatsedge-api-production-ed84.up.railway.app'
+        : 'http://localhost:3000'
 
-  <h2>Output</h2>
-  <pre id="output">Click a button...</pre>
+    // TEST FETCH
+    document.getElementById('load').addEventListener('click', async () => {
+      const res = await fetch(`${API_BASE}/api/edges/today`)
+      const data = await res.json()
+      document.getElementById('output').textContent =
+        JSON.stringify(data, null, 2)
+    })
+  </script>
 
-  <script src="app.js"></script>
 </body>
 </html>
