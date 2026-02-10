@@ -17,7 +17,9 @@ const playerMap = require('./playerMap.json')
 const app = express()
 const PORT = process.env.PORT || 3000
 
-
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'))
+})
 /* ================= MIDDLEWARE ================= */
 app.use(express.json())
 app.use(express.static(path.join(__dirname, 'public')))
