@@ -138,7 +138,7 @@ async function buildEdges() {
       }
 
       const games = await getPlayerGames(playerId, 10)
-      if (!Array.isArray(games) || games.length < 5) {
+      if (!Array.isArray(games) || games.length < 3) {
         console.log('❌ NOT ENOUGH GAMES:', prop.player)
         continue
       }
