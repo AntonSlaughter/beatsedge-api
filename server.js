@@ -70,10 +70,11 @@ function getPlayerGames(playerId, count = 10) {
   }
 
   return new Promise((resolve, reject) => {
-    execFile(
-      'python',
-      [path.join(__dirname, 'nba_stats.py'), playerId, count],
-      (err, stdout) => {
+ 	execFile(
+  	'python3',
+  	[path.join(__dirname, 'nba_stats.py'), playerId, count],
+ 	 (err, stdout) => {
+
         if (err) return reject(err)
 
         try {
