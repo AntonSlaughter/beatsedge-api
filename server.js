@@ -210,8 +210,8 @@ app.get('/api/prizepicks/slips', (req, res) => {
 })
 
 /* ================= AUTO REFRESH ================= */
-setInterval(buildEdges, 60 * 60 * 1000)
-buildEdges()
+setInterval(buildEdges, 60 * 60 * 1000) // hourly
+
 
 /* ================= START ================= */
 app.listen(PORT, '0.0.0.0', () => {
