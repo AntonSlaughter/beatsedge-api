@@ -3,92 +3,114 @@
 <head>
   <meta charset="UTF-8" />
   <title>BeatsEdge</title>
-
   <style>
     body {
       font-family: Arial, sans-serif;
-      background: #0f0f0f;
-      color: #eaeaea;
+      background: #0f172a;
+      color: #e5e7eb;
       padding: 20px;
     }
-
-    h1 {
-      margin-bottom: 10px;
-    }
-
     button {
-      padding: 10px 16px;
-      margin-bottom: 20px;
-      font-size: 16px;
+      margin-right: 10px;
+      padding: 10px 14px;
       cursor: pointer;
+      background: #2563eb;
+      color: white;
+      border: none;
+      border-radius: 4px;
     }
-
-    .edge-card {
-      background: #1c1c1c;
-      border-radius: 6px;
-      padding: 12px;
-      margin-bottom: 10px;
-      border-left: 4px solid #4caf50;
+    button:hover {
+      background: #1d4ed8;
     }
-
-    .empty {
-      opacity: 0.7;
+    table {
+      margin-top: 20px;
+      border-collapse: collapse;
+      width: 100%;
+    }
+    th, td {
+      border: 1px solid #334155;
+      padding: 8px;
+      text-align: left;
+    }
+    th {
+      background: #1e293b;
     }
   </style>
 </head>
 <body>
 
   <h1>BeatsEdge</h1>
-  <button id="load">Load Edges</button>
 
-  <!-- FIX: container exists -->
-  <div id="edges"></div>
+  <button onclick="loadEdges()">Load Edges</button>
+  <button onclick="loadProps()">Load Props</button>
+
+  <div id="status"></div>
+
+  <table id="table" style="display:none;">
+    <thead>
+      <tr id="table-head"></tr>
+    </thead>
+    <tbody id="table-body"></tbody>
+  </table>
 
   <script>
-    const button = document.getElementById('load')
-    const container = document.getElementById('edges')
-
     async function loadEdges() {
-      container.innerHTML = '<p class="empty">Loading…</p>'
+      document.getElementById('status').innerText = 'Loading edges...'
 
-      try {
-        const res = await fetch('/api/edges/today')
-        const edges = await res.json()
+      const res = await fetch('/api/edges/today', { cache: 'no-store' })
+      const data = await res.json()
 
-        container.innerHTML = ''
-
-        if (!Array.isArray(edges) || edges.length === 0) {
-          container.innerHTML = '<p class="empty">No edges available yet.</p>'
-          return
-        }
-
-        edges.forEach(edge => {
-          const div = document.createElement('div')
-          div.className = 'edge-card'
-
-          div.innerHTML = `
-            <strong>${edge.player}</strong><br>
-            ${edge.propType.replaceAll('_', ' ')} @ ${edge.line}<br>
-            Prob: ${(edge.modelProb * 100).toFixed(1)}%<br>
-            Grade: ${edge.confidence}
-          `
-
-          container.appendChild(div)
-        })
-      } catch (err) {
-        container.innerHTML = '<p class="empty">Failed to load edges.</p>'
-        console.error(err)
+      if (!data.length) {
+        document.getElementById('status').innerText = 'No edges available yet'
+        return
       }
+
+      renderTable(
+        ['Player', 'Prop', 'Line', 'Prob', 'Confidence'],
+        data.map(e => [
+          e.player,
+          e.propType,
+          e.line,
+          e.modelProb,
+          e.confidence
+        ])
+      )
     }
 
-    // Button click
-    button.addEventListener('click', loadEdges)
+    async function loadProps() {
+      document.getElementById('status').innerText = 'Loading props...'
 
-    // Initial load
-    loadEdges()
+      const res = await fetch('/api/player-props', { cache: 'no-store' })
+      const data = await res.json()
 
-    // Auto-refresh every 60s
-    setInterval(loadEdges, 60000)
+      if (!data.length) {
+        document.getElementById('status').innerText = 'No props found'
+        return
+      }
+
+      renderTable(
+        ['Player', 'Prop', 'Line', 'Opponent'],
+        data.map(p => [
+          p.player,
+          p.propType,
+          p.line,
+          p.opponent || '-'
+        ])
+      )
+    }
+
+    function renderTable(headers, rows) {
+      document.getElementById('status').innerText = ''
+      document.getElementById('table').style.display = 'table'
+
+      const head = document.getElementById('table-head')
+      const body = document.getElementById('table-body')
+
+      head.innerHTML = headers.map(h => `<th>${h}</th>`).join('')
+      body.innerHTML = rows
+        .map(r => `<tr>${r.map(c => `<td>${c}</td>`).join('')}</tr>`)
+        .join('')
+    }
   </script>
 
 </body>
