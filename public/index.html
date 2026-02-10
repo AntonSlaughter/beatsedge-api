@@ -2,92 +2,122 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>BeatsEdge</title>
   <style>
     body {
       font-family: Arial, sans-serif;
-      background: #0f0f0f;
-      color: #fff;
+      background: #0e1117;
+      color: #e6edf3;
+      margin: 0;
       padding: 20px;
     }
+    h1 { margin-bottom: 10px; }
+    .controls {
+      margin-bottom: 20px;
+    }
     button {
+      background: #1f6feb;
+      border: none;
+      color: white;
       padding: 10px 16px;
       margin-right: 10px;
+      border-radius: 6px;
       cursor: pointer;
     }
-    .item {
-      padding: 10px;
-      border-bottom: 1px solid #333;
-      margin-top: 8px;
+    button:hover { opacity: 0.9; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #161b22;
+      border-radius: 8px;
+      overflow: hidden;
     }
-    .muted {
-      color: #aaa;
-      font-size: 0.9em;
+    th, td {
+      padding: 12px 10px;
+      border-bottom: 1px solid #30363d;
+      text-align: left;
+      font-size: 14px;
     }
+    th {
+      background: #21262d;
+      font-weight: bold;
+    }
+    tr:hover { background: #1c2128; }
+
+    .rank-good { color: #3fb950; }
+    .rank-bad { color: #f85149; }
+    .rank-neutral { color: #d29922; }
   </style>
 </head>
 <body>
 
-  <h1>BeatsEdge</h1>
+<h1>BeatsEdge</h1>
+<p>Live PrizePicks Props + Defensive Matchups</p>
 
-  <button onclick="loadEdges()">Load Edges</button>
+<div class="controls">
   <button onclick="loadProps()">Load Props</button>
+  <button onclick="loadEdges()">Load Edges</button>
+</div>
 
-  <div id="output"></div>
+<table id="propsTable">
+  <thead>
+    <tr>
+      <th>Player</th>
+      <th>Stat</th>
+      <th>Line</th>
+      <th>Opponent</th>
+      <th>Defense vs Position</th>
+      <th>Model Prob</th>
+      <th>Confidence</th>
+    </tr>
+  </thead>
+  <tbody></tbody>
+</table>
 
-  <script>
-    const output = document.getElementById('output')
+<script>
+async function loadProps() {
+  const res = await fetch('/api/player-props');
+  const props = await res.json();
+  render(props, []);
+}
 
-    async function loadProps() {
-      output.innerHTML = '<h2>Available Props</h2>'
+async function loadEdges() {
+  const res = await fetch('/api/edges/today');
+  const edges = await res.json();
 
-      const res = await fetch('/api/player-props', { cache: 'no-store' })
-      const props = await res.json()
+  const propsRes = await fetch('/api/player-props');
+  const props = await propsRes.json();
 
-      if (!props.length) {
-        output.innerHTML += '<p class="muted">No props available</p>'
-        return
-      }
+  render(props, edges);
+}
 
-      props.forEach(p => {
-        const div = document.createElement('div')
-        div.className = 'item'
-        div.innerHTML = `
-          <strong>${p.player}</strong><br>
-          ${p.propType.replaceAll('_', ' ')}<br>
-          Line: ${p.line}<br>
-          Opponent: ${p.opponent || 'N/A'}<br>
-          <span class="muted">Status: No edge yet</span>
-        `
-        output.appendChild(div)
-      })
-    }
+function render(props, edges) {
+  const tbody = document.querySelector('#propsTable tbody');
+  tbody.innerHTML = '';
 
-    async function loadEdges() {
-      output.innerHTML = '<h2>Edges</h2>'
+  props.forEach(p => {
+    const edge = edges.find(e =>
+      e.player === p.player && e.propType === p.propType
+    );
 
-      const res = await fetch('/api/edges/today', { cache: 'no-store' })
-      const edges = await res.json()
+    const tr = document.createElement('tr');
 
-      if (!edges.length) {
-        output.innerHTML += '<p class="muted">No edges available yet</p>'
-        return
-      }
+    tr.innerHTML = `
+      <td>${p.player}</td>
+      <td>${p.propType.replace('player_', '').toUpperCase()}</td>
+      <td>${p.line}</td>
+      <td>${p.opponent || '-'}</td>
+      <td>${p.defenseRank ?? 'N/A'}</td>
+      <td>${edge ? edge.modelProb : '-'}</td>
+      <td>${edge ? edge.confidence : '-'}</td>
+    `;
 
-      edges.forEach(e => {
-        const div = document.createElement('div')
-        div.className = 'item'
-        div.innerHTML = `
-          <strong>${e.player}</strong><br>
-          ${e.propType.replaceAll('_', ' ')}<br>
-          Line: ${e.line}<br>
-          Model Prob: ${e.modelProb}<br>
-          Confidence: ${e.confidence}
-        `
-        output.appendChild(div)
-      })
-    }
-  </script>
+    tbody.appendChild(tr);
+  });
+}
+</script>
 
 </body>
 </html>

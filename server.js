@@ -24,6 +24,14 @@ const PORT = process.env.PORT || 8080
 /* ================= MIDDLEWARE ================= */
 app.use(express.json())
 app.use(express.static(path.join(__dirname, 'public')))
+app.use(express.json())
+app.use(express.static(path.join(__dirname, 'public')))
+
+// 🚫 Disable API caching (IMPORTANT for live testing)
+app.use('/api', (_, res, next) => {
+  res.setHeader('Cache-Control', 'no-store')
+  next()
+})
 
 /* ================= ROUTES ================= */
 app.get('/', (_, res) => {
@@ -72,7 +80,7 @@ function getPlayerGames(playerName, count = 10) {
 
   return new Promise((resolve, reject) => {
     execFile(
-      'python3',
+      'python',
       [
         path.join(__dirname, 'nba_stats.py'),
         String(playerName),
