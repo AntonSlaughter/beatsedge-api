@@ -26,8 +26,13 @@ app.use(express.json())
 app.use(express.static(path.join(__dirname, 'public')))
 
 /* ================= ROOT ================= */
-app.get('/', (req, res) => {
+app.get('/', (_, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'))
+})
+
+/* ================= HEALTH ================= */
+app.get('/api/health', (_, res) => {
+  res.json({ status: 'ok' })
 })
 
 /* ================= CACHE ================= */
@@ -54,11 +59,6 @@ function getConfidenceGrade(prob) {
   if (prob >= 0.54) return 'C'
   return 'D'
 }
-
-/* ================= HEALTH ================= */
-app.get('/api/health', (_, res) => {
-  res.json({ status: 'ok' })
-})
 
 /* ================= NBA STATS ================= */
 function getPlayerGames(playerId, count = 10) {
@@ -92,7 +92,6 @@ function getPlayerGames(playerId, count = 10) {
 app.get('/api/player-props', async (_, res) => {
   try {
     const props = await fetchPrizePicksProps()
-    console.log('📊 PrizePicks props:', props.length)
     res.json(props)
   } catch {
     res.status(500).json({ error: 'Failed to fetch PrizePicks props' })
@@ -108,10 +107,6 @@ async function buildEdges() {
     const props = await fetchPrizePicksProps()
     const edges = []
 
-    console.log('🔨 Building edges from:', props.length)
-
-    const MAX_PROPS = 60
-
     const statFnMap = {
       player_points: g => g.points,
       player_rebounds: g => g.rebounds,
@@ -124,7 +119,7 @@ async function buildEdges() {
       player_fantasy_points: g => g.fantasy
     }
 
-    for (const prop of props.slice(0, MAX_PROPS)) {
+    for (const prop of props.slice(0, 60)) {
       if (!prop.player || !prop.propType || prop.line == null) continue
 
       const playerId = playerMap[prop.player]
@@ -173,8 +168,6 @@ async function buildEdges() {
     }
 
     global.cachedEdges = edges
-
-    console.log('✅ Edges built:', edges.length)
   } catch (err) {
     edgesCache.building = false
     console.error('❌ Edge build failed:', err.message)
@@ -209,9 +202,10 @@ app.get('/api/prizepicks/slips', (req, res) => {
   res.json(slip)
 })
 
-/* ================= AUTO REFRESH ================= */
-setInterval(buildEdges, 60 * 60 * 1000) // hourly
-
+/* ================= BACKGROUND REFRESH ================= */
+setInterval(() => {
+  buildEdges().catch(() => {})
+}, 60 * 60 * 1000)
 
 /* ================= START ================= */
 app.listen(PORT, '0.0.0.0', () => {
