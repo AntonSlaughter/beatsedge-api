@@ -1,7 +1,5 @@
-const fetch = (...args) =>
-  import('node-fetch').then(({ default: fetch }) => fetch(...args))
+const data = require('./prizepicksProps.json')
 
-/* ================= STAT NORMALIZATION ================= */
 const STAT_MAP = {
   'Points': 'player_points',
   'Rebounds': 'player_rebounds',
@@ -13,50 +11,22 @@ const STAT_MAP = {
   'Fantasy Score': 'player_fantasy_points'
 }
 
-/* ================= FETCH PROPS ================= */
-async function fetchPrizePicksProps() {
-  const res = await fetch(
-    'https://static.prizepicks.com/projections.json',
-    {
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-        'Accept': 'application/json',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Referer': 'https://app.prizepicks.com/',
-        'Origin': 'https://app.prizepicks.com'
-      },
-      timeout: 15000
-    }
-  )
-
-  if (!res.ok) {
-    throw new Error(`PrizePicks CDN HTTP ${res.status}`)
-  }
-
-  const json = await res.json()
-
-  /* ================= PLAYER MAP ================= */
+function fetchPrizePicksProps() {
   const players = {}
-  for (const item of json.included || []) {
+  for (const item of data.included || []) {
     if (item.type === 'new_player') {
       players[item.id] = item.attributes?.name
     }
   }
 
-  /* ================= PROPS ================= */
   const props = []
 
-  for (const proj of json.data || []) {
+  for (const proj of data.data || []) {
     const attrs = proj.attributes
     const rel = proj.relationships
 
-    const playerId = rel?.new_player?.data?.id
-    const playerName = players[playerId]
-
+    const playerName = players[rel?.new_player?.data?.id]
     if (!playerName) continue
-    if (!attrs?.stat_display_name) continue
-    if (attrs.line_score == null) continue
 
     const statKey = STAT_MAP[attrs.stat_display_name]
     if (!statKey) continue
@@ -69,9 +39,7 @@ async function fetchPrizePicksProps() {
     })
   }
 
-  console.log(`✅ NORMALIZED PROPS: ${props.length}`)
-  console.log('🎯 SAMPLE:', props.slice(0, 3))
-
+  console.log(`✅ LOCAL PROPS LOADED: ${props.length}`)
   return props
 }
 
