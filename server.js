@@ -20,14 +20,14 @@ const defenseRanks = require('./defenseRanks.json')
 /* ================= APP SETUP ================= */
 const app = express()
 const PORT = process.env.PORT || 8080
+const PYTHON_CMD = process.env.PYTHON_CMD || 'python'
+const DISABLE_EDGES = process.env.DISABLE_EDGES === 'true'
 
 /* ================= MIDDLEWARE ================= */
 app.use(express.json())
 app.use(express.static(path.join(__dirname, 'public')))
-app.use(express.json())
-app.use(express.static(path.join(__dirname, 'public')))
 
-// 🚫 Disable API caching (IMPORTANT for live testing)
+// 🚫 Disable API caching (important for live testing)
 app.use('/api', (_, res, next) => {
   res.setHeader('Cache-Control', 'no-store')
   next()
@@ -80,12 +80,8 @@ function getPlayerGames(playerName, count = 10) {
 
   return new Promise((resolve, reject) => {
     execFile(
-      'python',
-      [
-        path.join(__dirname, 'nba_stats.py'),
-        String(playerName),
-        String(count)
-      ],
+      PYTHON_CMD,
+      [path.join(__dirname, 'nba_stats.py'), playerName, String(count)],
       (err, stdout) => {
         if (err) {
           console.error('❌ PYTHON ERROR:', err.message)
@@ -109,13 +105,18 @@ app.get('/api/player-props', async (_, res) => {
   try {
     const props = await fetchPrizePicksProps()
     res.json(props)
-  } catch {
-    res.status(500).json({ error: 'Failed to fetch PrizePicks props' })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
   }
 })
 
 /* ================= EDGE BUILDER ================= */
 async function buildEdges() {
+  if (DISABLE_EDGES) {
+    console.log('⚠️ Edge building disabled via env')
+    return
+  }
+
   if (edgesCache.building) return
   edgesCache.building = true
 
@@ -136,31 +137,15 @@ async function buildEdges() {
     }
 
     for (const prop of props.slice(0, 15)) {
-      console.log('➡️ PROP:', prop.player, prop.propType, prop.line)
-
       if (!prop.player || !prop.propType || prop.line == null) continue
 
       const playerId = await resolvePlayerId(prop.player)
-      if (!playerId) {
-        console.log('❌ PLAYER RESOLVE FAILED:', prop.player)
-        continue
-      }
+      if (!playerId) continue
 
       const games = await getPlayerGames(prop.player, 10)
-      console.log(`📊 NBA games fetched for ${prop.player}:`, games.length)
-
-      if (!Array.isArray(games) || games.length < 3) {
-        console.log('❌ NOT ENOUGH GAMES:', prop.player)
-        continue
-      }
-
-      // 🚑 INACTIVE / DNP FILTER
       const activeGames = games.filter(g => (g.minutes || 0) > 0)
 
-      if (activeGames.length < 3) {
-        console.log('🚑 PLAYER LIKELY INACTIVE:', prop.player)
-        continue
-      }
+      if (activeGames.length < 3) continue
 
       const statFn = statFnMap[prop.propType]
       if (!statFn) continue
@@ -170,8 +155,6 @@ async function buildEdges() {
         statFn,
         prop.line
       )
-
-      console.log('🎯 HIT RATE:', prop.player, hitRate)
 
       if (!hitRate || hitRate < 0.48) continue
 
@@ -196,7 +179,6 @@ async function buildEdges() {
         confidence: getConfidenceGrade(prob)
       })
 
-      console.log('✅ EDGE ADDED:', prop.player)
       await sleep(120)
     }
 
@@ -216,7 +198,10 @@ async function buildEdges() {
 app.get('/api/edges/today', (_, res) => {
   const now = Date.now()
 
-  if (edgesCache.data.length && now - edgesCache.timestamp < EDGES_TTL) {
+  if (
+    edgesCache.data.length &&
+    now - edgesCache.timestamp < EDGES_TTL
+  ) {
     return res.json(edgesCache.data)
   }
 
@@ -242,11 +227,11 @@ app.get('/api/prizepicks/slips', (req, res) => {
 
 /* ================= BACKGROUND REFRESH ================= */
 setInterval(() => {
-  if (!edgesCache.building) buildEdges()
+  if (!edgesCache.building && !DISABLE_EDGES) buildEdges()
 }, 60 * 60 * 1000)
 
 /* ================= START ================= */
-buildEdges()
+if (!DISABLE_EDGES) buildEdges()
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 BeatsEdge running on port ${PORT}`)
