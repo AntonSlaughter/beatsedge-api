@@ -1,46 +1,54 @@
-const fetch = (...args) =>
-  import('node-fetch').then(({ default: fetch }) => fetch(...args))
+const fs = require('fs')
+const path = require('path')
 
 console.log('🟡 PrizePicks fetcher loaded')
 
+// Absolute path to the file in project root
+const FILE_PATH = path.resolve(process.cwd(), 'prizepicksProps.json')
+
 async function fetchPrizePicksProps() {
-  console.log('🟡 Fetching PrizePicks projections...')
+  console.log('🟡 Loading PrizePicks projections from file...')
+  console.log('📁 File path:', FILE_PATH)
 
-  const res = await fetch(
-    'https://static.prizepicks.com/projections.json',
-    {
-      headers: {
-        'User-Agent': 'Mozilla/5.0',
-        'Accept': 'application/json'
-      }
-    }
-  )
-
-  console.log('🟡 HTTP STATUS:', res.status)
-
-  if (!res.ok) {
-    throw new Error(`PrizePicks HTTP ${res.status}`)
+  if (!fs.existsSync(FILE_PATH)) {
+    throw new Error('prizepicksProps.json not found')
   }
 
-  const json = await res.json()
+  const raw = fs.readFileSync(FILE_PATH, 'utf-8')
+  const json = JSON.parse(raw)
 
-  if (!json?.data || !Array.isArray(json.data)) {
-    throw new Error('Invalid PrizePicks JSON structure')
+  if (!json || typeof json !== 'object') {
+    throw new Error('Invalid JSON in prizepicksProps.json')
   }
 
-  console.log('🟢 PrizePicks projections loaded:', json.data.length)
+  // Handle both possible structures safely
+  const data =
+    Array.isArray(json.data) ? json.data :
+    Array.isArray(json) ? json :
+    null
+
+  if (!data || !data.length) {
+    throw new Error('No projections found in PrizePicks JSON')
+  }
+
+  console.log('🟢 Raw projections loaded:', data.length)
 
   // Normalize for BeatsEdge
-  return json.data.map(p => ({
-    player: p.attributes?.player_name,
-    propType: `player_${p.attributes?.stat_type?.toLowerCase()}`,
-    line: p.attributes?.line_score,
-    opponent: p.attributes?.opponent
-  })).filter(p =>
+  const props = data.map(p => ({
+    player: p.player || p.attributes?.player_name,
+    propType: p.propType || `player_${p.attributes?.stat_type?.toLowerCase()}`,
+    line: p.line ?? p.attributes?.line_score,
+    opponent: p.opponent || p.attributes?.opponent
+  }))
+  .filter(p =>
     p.player &&
     p.propType &&
     typeof p.line === 'number'
   )
+
+  console.log('🟢 Normalized props:', props.length)
+
+  return props
 }
 
 module.exports = { fetchPrizePicksProps }

@@ -6,7 +6,6 @@ const path = require('path')
 const { execFile } = require('child_process')
 
 /* ================= INTERNAL MODULES ================= */
-// NOTE: single, correct fetcher path
 const { fetchPrizePicksProps } = require('./scripts/fetchPrizePicksLocal')
 const { calculateHitRate } = require('./hitRateEngine')
 const { adjustProbability } = require('./defenseAdjuster')
@@ -61,9 +60,7 @@ function getConfidenceGrade(prob) {
 }
 
 /* ================= NBA STATS (PYTHON) ================= */
-// IMPORTANT FIX:
 // nba_stats.py expects (player_name, game_count)
-// NOT a numeric playerId
 function getPlayerGames(playerName, count = 10) {
   const cacheKey = `${playerName}:${count}`
   const cached = playerGameCache[cacheKey]
@@ -91,7 +88,7 @@ function getPlayerGames(playerName, count = 10) {
           const games = JSON.parse(stdout)
           playerGameCache[cacheKey] = { games, timestamp: now }
           resolve(games)
-        } catch (e) {
+        } catch {
           reject(new Error('Invalid NBA stats JSON'))
         }
       }
@@ -135,7 +132,6 @@ async function buildEdges() {
 
       if (!prop.player || !prop.propType || prop.line == null) continue
 
-      // Resolve once for validation/logging (optional)
       const playerId = await resolvePlayerId(prop.player)
       if (!playerId) {
         console.log('❌ PLAYER RESOLVE FAILED:', prop.player)
@@ -150,21 +146,36 @@ async function buildEdges() {
         continue
       }
 
+      // 🚑 INACTIVE / DNP FILTER
+      const activeGames = games.filter(g => (g.minutes || 0) > 0)
+
+      if (activeGames.length < 3) {
+        console.log('🚑 PLAYER LIKELY INACTIVE:', prop.player)
+        continue
+      }
+
       const statFn = statFnMap[prop.propType]
       if (!statFn) continue
 
-      const { hitRate } = calculateHitRate(games, statFn, prop.line)
+      const { hitRate } = calculateHitRate(
+        activeGames,
+        statFn,
+        prop.line
+      )
+
       console.log('🎯 HIT RATE:', prop.player, hitRate)
 
       if (!hitRate || hitRate < 0.48) continue
 
-      const defenseRank = defenseRanks[prop.opponent]?.[prop.propType] ?? 30
+      const defenseRank =
+        defenseRanks[prop.opponent]?.[prop.propType] ?? 30
 
       let prob = adjustProbability(hitRate, defenseRank)
-      prob = adjustForLocation(prob, games[0]?.isHome === true)
+      prob = adjustForLocation(prob, activeGames[0]?.isHome === true)
 
       const avgMinutes =
-        games.reduce((s, g) => s + (g.minutes || 0), 0) / games.length
+        activeGames.reduce((s, g) => s + g.minutes, 0) /
+        activeGames.length
 
       prob = adjustForMinutes(prob, avgMinutes)
 
