@@ -1,24 +1,22 @@
 const fs = require('fs')
 const path = require('path')
 
-function fetchPrizePicksProps() {
+async function fetchPrizePicksProps() {
   const filePath = path.join(__dirname, 'prizepicksProps.json')
 
   if (!fs.existsSync(filePath)) {
-    throw new Error('prizepicksProps.json not found')
+    throw new Error('Local PrizePicks file missing')
   }
 
-  const raw = fs.readFileSync(filePath, 'utf-8')
-  const props = JSON.parse(raw)
+  const raw = fs.readFileSync(filePath, 'utf8')
+  const json = JSON.parse(raw)
 
-  if (!Array.isArray(props)) {
-    throw new Error('PrizePicks props file is not an array')
-  }
-
-  console.log(`✅ LOCAL PROPS LOADED: ${props.length}`)
-  console.log('🎯 SAMPLE:', props.slice(0, 3))
-
-  return props
+  return json.data.map(p => ({
+    player: p.attributes.name,
+    propType: p.attributes.stat_type,
+    line: p.attributes.line_score,
+    opponent: p.attributes.opponent
+  }))
 }
 
 module.exports = { fetchPrizePicksProps }
