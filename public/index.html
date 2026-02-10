@@ -4,120 +4,138 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>BeatsEdge</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
-    body {
-      font-family: Arial, sans-serif;
-      background: #0e1117;
-      color: #e6edf3;
-      margin: 0;
-      padding: 20px;
+    :root {
+      --bg-primary:#ffffff;
+      --bg-secondary:#f8f9fa;
+      --bg-tertiary:#f1f3f5;
+      --text-primary:#111827;
+      --text-secondary:#6b7280;
+      --border-color:#e5e7eb;
+      --green:#16a34a;
+      --red:#dc2626;
+      --yellow:#ca8a04;
     }
-    h1 { margin-bottom: 10px; }
-    .controls {
-      margin-bottom: 20px;
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,sans-serif;
+      background:var(--bg-secondary);
+      color:var(--text-primary);
     }
-    button {
-      background: #1f6feb;
-      border: none;
-      color: white;
-      padding: 10px 16px;
-      margin-right: 10px;
-      border-radius: 6px;
-      cursor: pointer;
+    .app{min-height:100vh;display:flex;flex-direction:column}
+    header{
+      background:var(--bg-primary);
+      border-bottom:1px solid var(--border-color);
+      padding:1rem 2rem;
+      position:sticky;top:0;z-index:10;
+      display:flex;align-items:center;justify-content:space-between;
     }
-    button:hover { opacity: 0.9; }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      background: #161b22;
-      border-radius: 8px;
-      overflow: hidden;
+    header h1{font-size:1.25rem;margin:0;font-weight:800;letter-spacing:-0.02em}
+    main{padding:1.5rem 2rem;flex:1}
+    .grid{display:grid;grid-template-columns:1fr;gap:1rem}
+    @media(min-width:900px){.grid{grid-template-columns:2fr 1fr}}
+    .card{
+      background:var(--bg-primary);
+      border:1px solid var(--border-color);
+      border-radius:14px;
+      padding:1rem 1.25rem;
     }
-    th, td {
-      padding: 12px 10px;
-      border-bottom: 1px solid #30363d;
-      text-align: left;
-      font-size: 14px;
+    .card h2{margin:0 0 .75rem;font-size:1rem;font-weight:700}
+    .props-list{display:flex;flex-direction:column;gap:.75rem}
+    .prop{
+      display:grid;
+      grid-template-columns:2fr 1fr 1fr 1fr;
+      gap:.5rem;
+      padding:.75rem;
+      border-radius:10px;
+      background:var(--bg-tertiary);
+      align-items:center;
     }
-    th {
-      background: #21262d;
-      font-weight: bold;
+    .player{font-weight:600}
+    .matchup{font-size:.8rem;color:var(--text-secondary)}
+    .stat{font-weight:600;text-align:center}
+    .line{text-align:center}
+    .edge-badge{
+      padding:.25rem .5rem;
+      border-radius:999px;
+      font-size:.75rem;
+      font-weight:700;
+      text-align:center;
     }
-    tr:hover { background: #1c2128; }
-
-    .rank-good { color: #3fb950; }
-    .rank-bad { color: #f85149; }
-    .rank-neutral { color: #d29922; }
+    .edge-A{background:#dcfce7;color:#166534}
+    .edge-B{background:#fef9c3;color:#854d0e}
+    .edge-C{background:#fee2e2;color:#7f1d1d}
+    .muted{color:var(--text-secondary);font-size:.85rem}
   </style>
 </head>
 <body>
-
-<h1>BeatsEdge</h1>
-<p>Live PrizePicks Props + Defensive Matchups</p>
-
-<div class="controls">
-  <button onclick="loadProps()">Load Props</button>
-  <button onclick="loadEdges()">Load Edges</button>
-</div>
-
-<table id="propsTable">
-  <thead>
-    <tr>
-      <th>Player</th>
-      <th>Stat</th>
-      <th>Line</th>
-      <th>Opponent</th>
-      <th>Defense vs Position</th>
-      <th>Model Prob</th>
-      <th>Confidence</th>
-    </tr>
-  </thead>
-  <tbody></tbody>
-</table>
+  <div class="app">
+    <header>
+      <h1>BeatsEdge</h1>
+      <span class="muted">Live NBA Player Props</span>
+    </header>
+    <main>
+      <div class="grid">
+        <section class="card">
+          <h2>Today’s Props</h2>
+          <div id="props" class="props-list"></div>
+        </section>
+        <section class="card">
+          <h2>Edges</h2>
+          <div id="edges" class="muted">Edges loading or unavailable</div>
+        </section>
+      </div>
+    </main>
+  </div>
 
 <script>
-async function loadProps() {
+async function loadProps(){
   const res = await fetch('/api/player-props');
-  const props = await res.json();
-  render(props, []);
-}
-
-async function loadEdges() {
-  const res = await fetch('/api/edges/today');
-  const edges = await res.json();
-
-  const propsRes = await fetch('/api/player-props');
-  const props = await propsRes.json();
-
-  render(props, edges);
-}
-
-function render(props, edges) {
-  const tbody = document.querySelector('#propsTable tbody');
-  tbody.innerHTML = '';
-
-  props.forEach(p => {
-    const edge = edges.find(e =>
-      e.player === p.player && e.propType === p.propType
-    );
-
-    const tr = document.createElement('tr');
-
-    tr.innerHTML = `
-      <td>${p.player}</td>
-      <td>${p.propType.replace('player_', '').toUpperCase()}</td>
-      <td>${p.line}</td>
-      <td>${p.opponent || '-'}</td>
-      <td>${p.defenseRank ?? 'N/A'}</td>
-      <td>${edge ? edge.modelProb : '-'}</td>
-      <td>${edge ? edge.confidence : '-'}</td>
-    `;
-
-    tbody.appendChild(tr);
+  const data = await res.json();
+  const el = document.getElementById('props');
+  el.innerHTML='';
+  data.forEach(p=>{
+    const div=document.createElement('div');
+    div.className='prop';
+    div.innerHTML=`
+      <div>
+        <div class="player">${p.player}</div>
+        <div class="matchup">${p.matchup || ''}</div>
+      </div>
+      <div class="stat">${p.stat}</div>
+      <div class="line">${p.line}</div>
+      <div class="muted">PP</div>`;
+    el.appendChild(div);
   });
 }
-</script>
 
+async function loadEdges(){
+  try{
+    const res = await fetch('/api/edges/today');
+    const data = await res.json();
+    const el=document.getElementById('edges');
+    if(!data.length){el.textContent='No strong edges today';return;}
+    el.innerHTML='';
+    data.forEach(e=>{
+      const d=document.createElement('div');
+      d.className='prop';
+      d.innerHTML=`
+        <div>
+          <div class="player">${e.player}</div>
+          <div class="matchup">${e.matchup}</div>
+        </div>
+        <div class="stat">${e.stat}</div>
+        <div class="line">${e.line}</div>
+        <div class="edge-badge edge-${e.grade[0]}">${e.grade}</div>`;
+      el.appendChild(d);
+    });
+  }catch{document.getElementById('edges').textContent='Edges unavailable';}
+}
+
+loadProps();
+loadEdges();
+</script>
 </body>
 </html>
