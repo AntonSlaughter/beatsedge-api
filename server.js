@@ -19,7 +19,7 @@ const playerMap = require('./playerMap.json')
 
 /* ================= APP SETUP ================= */
 const app = express()
-const PORT = process.env.PORT || 3000
+const PORT = process.env.PORT || 8080
 
 /* ================= MIDDLEWARE ================= */
 app.use(express.json())
@@ -60,7 +60,7 @@ function getConfidenceGrade(prob) {
   return 'D'
 }
 
-/* ================= NBA STATS ================= */
+/* ================= NBA STATS (PYTHON) ================= */
 function getPlayerGames(playerId, count = 10) {
   const cached = playerGameCache[playerId]
   const now = Date.now()
@@ -70,19 +70,26 @@ function getPlayerGames(playerId, count = 10) {
   }
 
   return new Promise((resolve, reject) => {
- 	execFile(
-  	'python3',
-  	[path.join(__dirname, 'nba_stats.py'), playerId, count],
- 	 (err, stdout) => {
+    execFile(
+      'python3',
+      [path.join(__dirname, 'nba_stats.py'), playerId, count.toString()],
+      (err, stdout) => {
+        if (err) {
+          console.error('❌ PYTHON ERROR:', err.message)
+          return reject(err)
+        }
 
-        if (err) return reject(err)
+        if (!stdout) {
+          return reject(new Error('Empty NBA stats output'))
+        }
 
         try {
           const games = JSON.parse(stdout)
           playerGameCache[playerId] = { games, timestamp: now }
           resolve(games)
-        } catch {
-          reject(new Error('Invalid NBA stats JSON'))
+        } catch (e) {
+          console.error('❌ BAD NBA JSON:', stdout)
+          reject(e)
         }
       }
     )
@@ -95,7 +102,7 @@ app.get('/api/player-props', async (_, res) => {
     const props = await fetchPrizePicksProps()
     console.log('📊 PrizePicks props fetched:', props.length)
     res.json(props)
-  } catch {
+  } catch (err) {
     res.status(500).json({ error: 'Failed to fetch PrizePicks props' })
   }
 })
@@ -115,12 +122,10 @@ async function buildEdges() {
       player_points: g => g.points,
       player_rebounds: g => g.rebounds,
       player_assists: g => g.assists,
-      player_threes: g => g.threes,
       player_points_rebounds_assists: g => g.points + g.rebounds + g.assists,
       player_points_rebounds: g => g.points + g.rebounds,
       player_points_assists: g => g.points + g.assists,
-      player_rebounds_assists: g => g.rebounds + g.assists,
-      player_fantasy_points: g => g.fantasy
+      player_rebounds_assists: g => g.rebounds + g.assists
     }
 
     for (const prop of props.slice(0, 10)) {
@@ -131,6 +136,8 @@ async function buildEdges() {
         continue
       }
 
+      console.log('🗺️ MAP CHECK:', prop.player, '→', playerMap[prop.player])
+
       const playerId = playerMap[prop.player]
       if (!playerId) {
         console.log('❌ PLAYER NOT FOUND IN MAP:', prop.player)
@@ -138,13 +145,21 @@ async function buildEdges() {
       }
 
       const games = await getPlayerGames(playerId, 10)
-      if (!Array.isArray(games) || games.length < 3) {
+
+      if (!Array.isArray(games)) {
+        console.log('❌ NBA GAMES INVALID:', prop.player)
+        continue
+      }
+
+      console.log(`📊 NBA games fetched for ${prop.player}:`, games.length)
+
+      if (games.length < 2) {
         console.log('❌ NOT ENOUGH GAMES:', prop.player)
         continue
       }
 
       const statFn = statFnMap[prop.propType]
-      if (typeof statFn !== 'function') {
+      if (!statFn) {
         console.log('❌ STAT FUNCTION MISSING:', prop.propType)
         continue
       }
@@ -158,16 +173,11 @@ async function buildEdges() {
       }
 
       const defenseRank =
-        prop.opponent && defenseRanks[prop.opponent]?.[prop.propType]
-          ? defenseRanks[prop.opponent][prop.propType]
-          : 30
+        defenseRanks[prop.opponent]?.[prop.propType] ?? 30
 
       let prob = adjustProbability(hitRate, defenseRank)
 
-      prob = adjustForLocation(
-        prob,
-        games[0]?.matchup?.includes('vs') ?? false
-      )
+      prob = adjustForLocation(prob, games[0]?.isHome === true)
 
       const avgMinutes =
         games.reduce((s, g) => s + (g.minutes || 0), 0) / games.length
@@ -238,7 +248,6 @@ setInterval(() => {
 }, 60 * 60 * 1000)
 
 /* ================= START ================= */
-// 🔥 Build edges immediately on boot
 buildEdges()
 
 app.listen(PORT, '0.0.0.0', () => {
