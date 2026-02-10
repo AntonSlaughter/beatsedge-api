@@ -1,0 +1,152 @@
+{
+  "ATL": {
+    "points": 18,
+    "rebounds": 20,
+    "assists": 22
+  },
+  "BOS": {
+    "points": 3,
+    "rebounds": 5,
+    "assists": 4
+  },
+  "BKN": {
+    "points": 9,
+    "rebounds": 14,
+    "assists": 11
+  },
+  "CHA": {
+    "points": 27,
+    "rebounds": 25,
+    "assists": 26
+  },
+  "CHI": {
+    "points": 15,
+    "rebounds": 18,
+    "assists": 17
+  },
+  "CLE": {
+    "points": 2,
+    "rebounds": 3,
+    "assists": 6
+  },
+  "DAL": {
+    "points": 21,
+    "rebounds": 24,
+    "assists": 19
+  },
+  "DEN": {
+    "points": 7,
+    "rebounds": 8,
+    "assists": 9
+  },
+  "DET": {
+    "points": 29,
+    "rebounds": 30,
+    "assists": 28
+  },
+  "GSW": {
+    "points": 11,
+    "rebounds": 13,
+    "assists": 12
+  },
+  "HOU": {
+    "points": 6,
+    "rebounds": 10,
+    "assists": 8
+  },
+  "IND": {
+    "points": 23,
+    "rebounds": 21,
+    "assists": 24
+  },
+  "LAC": {
+    "points": 8,
+    "rebounds": 7,
+    "assists": 5
+  },
+  "LAL": {
+    "points": 14,
+    "rebounds": 12,
+    "assists": 16
+  },
+  "MEM": {
+    "points": 10,
+    "rebounds": 9,
+    "assists": 7
+  },
+  "MIA": {
+    "points": 1,
+    "rebounds": 2,
+    "assists": 1
+  },
+  "MIL": {
+    "points": 5,
+    "rebounds": 6,
+    "assists": 3
+  },
+  "MIN": {
+    "points": 4,
+    "rebounds": 4,
+    "assists": 2
+  },
+  "NOP": {
+    "points": 13,
+    "rebounds": 11,
+    "assists": 15
+  },
+  "NYK": {
+    "points": 12,
+    "rebounds": 15,
+    "assists": 10
+  },
+  "OKC": {
+    "points": 16,
+    "rebounds": 17,
+    "assists": 14
+  },
+  "ORL": {
+    "points": 17,
+    "rebounds": 16,
+    "assists": 18
+  },
+  "PHI": {
+    "points": 19,
+    "rebounds": 19,
+    "assists": 20
+  },
+  "PHX": {
+    "points": 20,
+    "rebounds": 22,
+    "assists": 21
+  },
+  "POR": {
+    "points": 25,
+    "rebounds": 26,
+    "assists": 27
+  },
+  "SAC": {
+    "points": 22,
+    "rebounds": 23,
+    "assists": 23
+  },
+  "SAS": {
+    "points": 28,
+    "rebounds": 27,
+    "assists": 29
+  },
+  "TOR": {
+    "points": 24,
+    "rebounds": 28,
+    "assists": 25
+  },
+  "UTA": {
+    "points": 26,
+    "rebounds": 29,
+    "assists": 30
+  },
+  "WAS": {
+    "points": 30,
+    "rebounds": 29,
+    "assists": 30
+  }
+}

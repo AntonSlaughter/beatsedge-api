@@ -1,0 +1,14 @@
+[
+  {
+    "player": "LeBron James",
+    "propType": "player_points",
+    "line": 27.5,
+    "opponent": "DEN"
+  },
+  {
+    "player": "Nikola Jokic",
+    "propType": "player_rebounds",
+    "line": 12.5,
+    "opponent": "LAL"
+  }
+]
