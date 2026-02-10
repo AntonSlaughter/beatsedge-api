@@ -17,7 +17,17 @@ const STAT_MAP = {
 async function fetchPrizePicksProps() {
   const res = await fetch(
     'https://static.prizepicks.com/projections.json',
-    { timeout: 10000 }
+    {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+        'Accept': 'application/json',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': 'https://app.prizepicks.com/',
+        'Origin': 'https://app.prizepicks.com'
+      },
+      timeout: 15000
+    }
   )
 
   if (!res.ok) {
