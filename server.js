@@ -92,6 +92,7 @@ function getPlayerGames(playerId, count = 10) {
 app.get('/api/player-props', async (_, res) => {
   try {
     const props = await fetchPrizePicksProps()
+    console.log('📊 PrizePicks props fetched:', props.length)
     res.json(props)
   } catch {
     res.status(500).json({ error: 'Failed to fetch PrizePicks props' })
@@ -107,6 +108,8 @@ async function buildEdges() {
     const props = await fetchPrizePicksProps()
     const edges = []
 
+    console.log('🔨 Building edges from props:', props.length)
+
     const statFnMap = {
       player_points: g => g.points,
       player_rebounds: g => g.rebounds,
@@ -119,25 +122,44 @@ async function buildEdges() {
       player_fantasy_points: g => g.fantasy
     }
 
-    for (const prop of props.slice(0, 60)) {
-      if (!prop.player || !prop.propType || prop.line == null) continue
+    for (const prop of props.slice(0, 10)) {
+      console.log('➡️ PROP:', prop.player, prop.propType, prop.line)
+
+      if (!prop.player || !prop.propType || prop.line == null) {
+        console.log('❌ INVALID PROP')
+        continue
+      }
 
       const playerId = playerMap[prop.player]
-      if (!playerId) continue
+      if (!playerId) {
+        console.log('❌ PLAYER NOT FOUND IN MAP:', prop.player)
+        continue
+      }
 
       const games = await getPlayerGames(playerId, 10)
-      if (!Array.isArray(games) || games.length < 5) continue
+      if (!Array.isArray(games) || games.length < 5) {
+        console.log('❌ NOT ENOUGH GAMES:', prop.player)
+        continue
+      }
 
       const statFn = statFnMap[prop.propType]
-      if (typeof statFn !== 'function') continue
+      if (typeof statFn !== 'function') {
+        console.log('❌ STAT FUNCTION MISSING:', prop.propType)
+        continue
+      }
 
       const { hitRate } = calculateHitRate(games, statFn, prop.line)
-      if (!hitRate || hitRate < 0.48) continue
+      console.log('🎯 HIT RATE:', prop.player, hitRate)
+
+      if (!hitRate || hitRate < 0.48) {
+        console.log('❌ HIT RATE TOO LOW')
+        continue
+      }
 
       const defenseRank =
         prop.opponent && defenseRanks[prop.opponent]?.[prop.propType]
           ? defenseRanks[prop.opponent][prop.propType]
-          : 30 // neutral fallback
+          : 30
 
       let prob = adjustProbability(hitRate, defenseRank)
 
@@ -160,6 +182,7 @@ async function buildEdges() {
         confidence: getConfidenceGrade(prob)
       })
 
+      console.log('✅ EDGE ADDED:', prop.player)
       await sleep(150)
     }
 
@@ -186,7 +209,7 @@ app.get('/api/edges/today', (_, res) => {
     return res.json(edgesCache.data)
   }
 
-  buildEdges() // async background refresh
+  buildEdges()
   res.json(edgesCache.data)
 })
 
@@ -214,6 +237,9 @@ setInterval(() => {
 }, 60 * 60 * 1000)
 
 /* ================= START ================= */
+// 🔥 Build edges immediately on boot
+buildEdges()
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 BeatsEdge running on port ${PORT}`)
 })

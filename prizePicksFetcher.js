@@ -1,4 +1,5 @@
-const data = require('./prizepicksProps.json')
+const fs = require('fs')
+const path = require('path')
 
 const STAT_MAP = {
   'Points': 'player_points',
@@ -11,9 +12,17 @@ const STAT_MAP = {
   'Fantasy Score': 'player_fantasy_points'
 }
 
+let cachedProps = null
+
 function fetchPrizePicksProps() {
+  if (cachedProps) return cachedProps
+
+  const filePath = path.join(__dirname, 'prizepicksProps.json')
+  const raw = fs.readFileSync(filePath, 'utf8')
+  const json = JSON.parse(raw)
+
   const players = {}
-  for (const item of data.included || []) {
+  for (const item of json.included || []) {
     if (item.type === 'new_player') {
       players[item.id] = item.attributes?.name
     }
@@ -21,15 +30,15 @@ function fetchPrizePicksProps() {
 
   const props = []
 
-  for (const proj of data.data || []) {
+  for (const proj of json.data || []) {
     const attrs = proj.attributes
     const rel = proj.relationships
 
-    const playerName = players[rel?.new_player?.data?.id]
-    if (!playerName) continue
+    const playerId = rel?.new_player?.data?.id
+    const playerName = players[playerId]
+    const statKey = STAT_MAP[attrs?.stat_display_name]
 
-    const statKey = STAT_MAP[attrs.stat_display_name]
-    if (!statKey) continue
+    if (!playerName || !statKey || attrs.line_score == null) continue
 
     props.push({
       player: playerName,
@@ -40,6 +49,8 @@ function fetchPrizePicksProps() {
   }
 
   console.log(`✅ LOCAL PROPS LOADED: ${props.length}`)
+
+  cachedProps = props
   return props
 }
 
