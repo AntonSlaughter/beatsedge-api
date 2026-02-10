@@ -15,7 +15,8 @@ const defenseRanks = require('./defenseRanks.json')
 const playerMap = require('./playerMap.json')
 
 const app = express()
-const PORT = 3000
+const PORT = process.env.PORT || 3000
+
 
 /* ================= MIDDLEWARE ================= */
 app.use(express.json())
