@@ -6,11 +6,13 @@ RUN apt-get update && apt-get install -y python3 python3-pip
 # Set working directory
 WORKDIR /app
 
-# Copy package files
+# Copy Node files
 COPY package*.json ./
-
-# Install deps
 RUN npm install
+
+# Copy Python requirements
+COPY requirements.txt ./
+RUN pip3 install --no-cache-dir -r requirements.txt
 
 # Copy app source
 COPY . .
