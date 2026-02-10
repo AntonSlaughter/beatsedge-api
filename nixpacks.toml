@@ -4,8 +4,5 @@ nixPkgs = ["nodejs_20", "python311"]
 [phases.install]
 cmds = ["npm install"]
 
-[phases.build]
-cmds = []
-
-[start]
-cmd = "node server.js"
+[phases.start]
+cmd = "npm start"
