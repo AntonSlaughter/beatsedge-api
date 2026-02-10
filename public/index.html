@@ -6,34 +6,23 @@
   <style>
     body {
       font-family: Arial, sans-serif;
-      background: #0f172a;
-      color: #e5e7eb;
+      background: #0f0f0f;
+      color: #fff;
       padding: 20px;
     }
     button {
+      padding: 10px 16px;
       margin-right: 10px;
-      padding: 10px 14px;
       cursor: pointer;
-      background: #2563eb;
-      color: white;
-      border: none;
-      border-radius: 4px;
     }
-    button:hover {
-      background: #1d4ed8;
+    .item {
+      padding: 10px;
+      border-bottom: 1px solid #333;
+      margin-top: 8px;
     }
-    table {
-      margin-top: 20px;
-      border-collapse: collapse;
-      width: 100%;
-    }
-    th, td {
-      border: 1px solid #334155;
-      padding: 8px;
-      text-align: left;
-    }
-    th {
-      background: #1e293b;
+    .muted {
+      color: #aaa;
+      font-size: 0.9em;
     }
   </style>
 </head>
@@ -44,72 +33,59 @@
   <button onclick="loadEdges()">Load Edges</button>
   <button onclick="loadProps()">Load Props</button>
 
-  <div id="status"></div>
-
-  <table id="table" style="display:none;">
-    <thead>
-      <tr id="table-head"></tr>
-    </thead>
-    <tbody id="table-body"></tbody>
-  </table>
+  <div id="output"></div>
 
   <script>
-    async function loadEdges() {
-      document.getElementById('status').innerText = 'Loading edges...'
-
-      const res = await fetch('/api/edges/today', { cache: 'no-store' })
-      const data = await res.json()
-
-      if (!data.length) {
-        document.getElementById('status').innerText = 'No edges available yet'
-        return
-      }
-
-      renderTable(
-        ['Player', 'Prop', 'Line', 'Prob', 'Confidence'],
-        data.map(e => [
-          e.player,
-          e.propType,
-          e.line,
-          e.modelProb,
-          e.confidence
-        ])
-      )
-    }
+    const output = document.getElementById('output')
 
     async function loadProps() {
-      document.getElementById('status').innerText = 'Loading props...'
+      output.innerHTML = '<h2>Available Props</h2>'
 
       const res = await fetch('/api/player-props', { cache: 'no-store' })
-      const data = await res.json()
+      const props = await res.json()
 
-      if (!data.length) {
-        document.getElementById('status').innerText = 'No props found'
+      if (!props.length) {
+        output.innerHTML += '<p class="muted">No props available</p>'
         return
       }
 
-      renderTable(
-        ['Player', 'Prop', 'Line', 'Opponent'],
-        data.map(p => [
-          p.player,
-          p.propType,
-          p.line,
-          p.opponent || '-'
-        ])
-      )
+      props.forEach(p => {
+        const div = document.createElement('div')
+        div.className = 'item'
+        div.innerHTML = `
+          <strong>${p.player}</strong><br>
+          ${p.propType.replaceAll('_', ' ')}<br>
+          Line: ${p.line}<br>
+          Opponent: ${p.opponent || 'N/A'}<br>
+          <span class="muted">Status: No edge yet</span>
+        `
+        output.appendChild(div)
+      })
     }
 
-    function renderTable(headers, rows) {
-      document.getElementById('status').innerText = ''
-      document.getElementById('table').style.display = 'table'
+    async function loadEdges() {
+      output.innerHTML = '<h2>Edges</h2>'
 
-      const head = document.getElementById('table-head')
-      const body = document.getElementById('table-body')
+      const res = await fetch('/api/edges/today', { cache: 'no-store' })
+      const edges = await res.json()
 
-      head.innerHTML = headers.map(h => `<th>${h}</th>`).join('')
-      body.innerHTML = rows
-        .map(r => `<tr>${r.map(c => `<td>${c}</td>`).join('')}</tr>`)
-        .join('')
+      if (!edges.length) {
+        output.innerHTML += '<p class="muted">No edges available yet</p>'
+        return
+      }
+
+      edges.forEach(e => {
+        const div = document.createElement('div')
+        div.className = 'item'
+        div.innerHTML = `
+          <strong>${e.player}</strong><br>
+          ${e.propType.replaceAll('_', ' ')}<br>
+          Line: ${e.line}<br>
+          Model Prob: ${e.modelProb}<br>
+          Confidence: ${e.confidence}
+        `
+        output.appendChild(div)
+      })
     }
   </script>
 
