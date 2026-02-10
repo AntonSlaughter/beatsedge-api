@@ -15,31 +15,18 @@ const STAT_MAP = {
 
 /* ================= FETCH PROPS ================= */
 async function fetchPrizePicksProps() {
-  const res = await fetch('https://api.prizepicks.com/projections', {
-    headers: {
-      'User-Agent':
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-      'Accept': 'application/json',
-      'Accept-Language': 'en-US,en;q=0.9',
-      'Origin': 'https://app.prizepicks.com',
-      'Referer': 'https://app.prizepicks.com/',
-      'Connection': 'keep-alive'
-    }
-  })
+  const res = await fetch(
+    'https://static.prizepicks.com/projections.json',
+    { timeout: 10000 }
+  )
 
   if (!res.ok) {
-    throw new Error(`PrizePicks HTTP ${res.status}`)
+    throw new Error(`PrizePicks CDN HTTP ${res.status}`)
   }
 
-  const text = await res.text()
+  const json = await res.json()
 
-  if (text.startsWith('<')) {
-    throw new Error('PrizePicks blocked request (HTML response)')
-  }
-
-  const json = JSON.parse(text)
-
-  /* ================= BUILD PLAYER MAP ================= */
+  /* ================= PLAYER MAP ================= */
   const players = {}
   for (const item of json.included || []) {
     if (item.type === 'new_player') {
@@ -47,7 +34,7 @@ async function fetchPrizePicksProps() {
     }
   }
 
-  /* ================= NORMALIZE PROPS ================= */
+  /* ================= PROPS ================= */
   const props = []
 
   for (const proj of json.data || []) {
