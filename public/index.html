@@ -3,139 +3,199 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>BeatsEdge</title>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <title>BeatsEdge — NBA Props</title>
+
   <style>
-    :root {
-      --bg-primary:#ffffff;
-      --bg-secondary:#f8f9fa;
-      --bg-tertiary:#f1f3f5;
-      --text-primary:#111827;
-      --text-secondary:#6b7280;
-      --border-color:#e5e7eb;
-      --green:#16a34a;
-      --red:#dc2626;
-      --yellow:#ca8a04;
-    }
-    *{box-sizing:border-box}
-    body{
-      margin:0;
-      font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,sans-serif;
-      background:var(--bg-secondary);
-      color:var(--text-primary);
-    }
-    .app{min-height:100vh;display:flex;flex-direction:column}
-    header{
-      background:var(--bg-primary);
-      border-bottom:1px solid var(--border-color);
-      padding:1rem 2rem;
-      position:sticky;top:0;z-index:10;
-      display:flex;align-items:center;justify-content:space-between;
-    }
-    header h1{font-size:1.25rem;margin:0;font-weight:800;letter-spacing:-0.02em}
-    main{padding:1.5rem 2rem;flex:1}
-    .grid{display:grid;grid-template-columns:1fr;gap:1rem}
-    @media(min-width:900px){.grid{grid-template-columns:2fr 1fr}}
-    .card{
-      background:var(--bg-primary);
-      border:1px solid var(--border-color);
-      border-radius:14px;
-      padding:1rem 1.25rem;
-    }
-    .card h2{margin:0 0 .75rem;font-size:1rem;font-weight:700}
-    .props-list{display:flex;flex-direction:column;gap:.75rem}
-    .prop{
-      display:grid;
-      grid-template-columns:2fr 1fr 1fr 1fr;
-      gap:.5rem;
-      padding:.75rem;
-      border-radius:10px;
-      background:var(--bg-tertiary);
-      align-items:center;
-    }
-    .player{font-weight:600}
-    .matchup{font-size:.8rem;color:var(--text-secondary)}
-    .stat{font-weight:600;text-align:center}
-    .line{text-align:center}
-    .edge-badge{
-      padding:.25rem .5rem;
-      border-radius:999px;
-      font-size:.75rem;
-      font-weight:700;
-      text-align:center;
-    }
-    .edge-A{background:#dcfce7;color:#166534}
-    .edge-B{background:#fef9c3;color:#854d0e}
-    .edge-C{background:#fee2e2;color:#7f1d1d}
-    .muted{color:var(--text-secondary);font-size:.85rem}
+    body { margin:0; font-family:Inter, Arial, sans-serif; background:#0b0b0b; color:#fff; }
+    header { display:flex; justify-content:space-between; align-items:center; padding:16px 24px; border-bottom:1px solid #1e1e1e; }
+    .logo { font-size:22px; font-weight:700; color:#ff4d4d; }
+    nav span { margin:0 12px; color:#bfbfbf; cursor:pointer; }
+    nav span.active { color:#ff4d4d; }
+    .smart-btn { background:#ff4d4d; color:#fff; border:none; padding:10px 16px; border-radius:8px; font-weight:600; cursor:pointer; }
+
+    .container { max-width:1100px; margin:24px auto; padding:0 16px; }
+    h1 { font-size:20px; margin-bottom:16px; }
+
+    .player-card { background:#121212; border-radius:14px; padding:20px; margin-bottom:20px; box-shadow:0 0 0 1px #1e1e1e; }
+    .player-top { display:flex; align-items:center; }
+    .player-left { display:flex; gap:12px; align-items:center; }
+    .player-headshot { width:40px; height:40px; border-radius:50%; background:#222; }
+    .player-name { font-size:18px; font-weight:600; }
+    .matchup { font-size:13px; color:#9e9e9e; }
+
+    .props-row { display:flex; gap:12px; margin-top:18px; flex-wrap:wrap; }
+    .prop-box { position:relative; background:#181818; border-radius:10px; padding:12px 14px; min-width:160px; box-shadow:0 0 0 1px #222; }
+
+    .prop-label { font-size:11px; color:#9e9e9e; }
+    .prop-value { font-size:18px; font-weight:600; }
+
+    .grade-badge { position:absolute; top:10px; right:10px; padding:4px 8px; border-radius:6px; font-weight:700; }
+    .grade-A{background:#1f8f4a;}
+    .grade-B{background:#c9a227;color:#000;}
+    .grade-C{background:#b36b00;}
+    .grade-D{background:#9f1d1d;}
+
+    .confidence-bar { width:100%; height:6px; background:#2a2a2a; border-radius:4px; margin-top:8px; }
+    .confidence-fill { height:100%; border-radius:4px; }
+    .high{background:#1f8f4a;}
+    .mid{background:#c9a227;}
+    .low{background:#9f1d1d;}
+
+    .dropdown { margin-top:10px; }
+    .dropdown-toggle { background:none; border:none; color:#9e9e9e; font-size:12px; cursor:pointer; }
+    .dropdown-content { max-height:0; overflow:hidden; opacity:0; transition:.3s; background:#101010; border-radius:10px; margin-top:10px; padding:0 12px; }
+    .dropdown.open .dropdown-content { max-height:500px; opacity:1; padding:12px; }
+
+    .rank { padding:2px 8px; border-radius:6px; font-size:12px; font-weight:600; margin-left:6px; }
+    .rank-bad{background:#9f1d1d;}
+    .rank-neutral{background:#c9a227;color:#000;}
+    .rank-good{background:#1f8f4a;}
   </style>
 </head>
+
 <body>
-  <div class="app">
-    <header>
-      <h1>BeatsEdge</h1>
-      <span class="muted">Live NBA Player Props</span>
-    </header>
-    <main>
-      <div class="grid">
-        <section class="card">
-          <h2>Today’s Props</h2>
-          <div id="props" class="props-list"></div>
-        </section>
-        <section class="card">
-          <h2>Edges</h2>
-          <div id="edges" class="muted">Edges loading or unavailable</div>
-        </section>
-      </div>
-    </main>
-  </div>
+<header>
+  <div class="logo">BeatsEdge</div>
+  <nav>
+    <span class="active">NBA</span><span>NFL</span><span>NHL</span><span>MLB</span>
+  </nav>
+  <button class="smart-btn">Smart Parlay</button>
+</header>
+
+<div class="container">
+  <h1>PrizePicks Props</h1>
+</div>
 
 <script>
-async function loadProps(){
-  const res = await fetch('/api/player-props');
-  const data = await res.json();
-  const el = document.getElementById('props');
-  el.innerHTML='';
-  data.forEach(p=>{
-    const div=document.createElement('div');
-    div.className='prop';
-    div.innerHTML=`
-      <div>
-        <div class="player">${p.player}</div>
-        <div class="matchup">${p.matchup || ''}</div>
-      </div>
-      <div class="stat">${p.stat}</div>
-      <div class="line">${p.line}</div>
-      <div class="muted">PP</div>`;
-    el.appendChild(div);
+const container = document.querySelector('.container');
+
+/* ===============================
+   STAT ALIAS NORMALIZATION (FINAL)
+================================= */
+function mapStatAlias(raw) {
+  const s = raw.toUpperCase().replace(/\s+/g, '');
+
+  if (s === 'POINTS' || s === 'PTS') return 'POINTS';
+  if (s === 'REBOUNDS' || s === 'REBS') return 'REBOUNDS';
+  if (s === 'ASSISTS' || s === 'ASTS') return 'ASSISTS';
+
+  if (s === 'PTS+REBS') return 'PR';
+  if (s === 'PTS+ASTS') return 'PA';
+  if (s === 'PTS+REBS+ASTS') return 'PRA';
+
+  if (s === 'BLOCKEDSHOTS' || s === 'BLOCKS') return 'BLOCKED SHOTS';
+  if (s === 'STEALS') return 'STEALS';
+
+  return s;
+}
+
+Promise.all([
+  fetch('/api/player-props').then(r => r.json()),
+  fetch('/api/edges/today')
+    .then(r => r.json())
+    .then(d => Array.isArray(d) ? d : d.edges || [])
+    .catch(() => [])
+]).then(([props, edges]) => {
+
+  /* ===============================
+     BUILD EDGE MAP (CANONICAL)
+  ================================ */
+  const edgeMap = {};
+  edges.forEach(e => {
+    const key = `${e.player.toUpperCase()}-${e.stat}`;
+    edgeMap[key] = e;
   });
-}
 
-async function loadEdges(){
-  try{
-    const res = await fetch('/api/edges/today');
-    const data = await res.json();
-    const el=document.getElementById('edges');
-    if(!data.length){el.textContent='No strong edges today';return;}
-    el.innerHTML='';
-    data.forEach(e=>{
-      const d=document.createElement('div');
-      d.className='prop';
-      d.innerHTML=`
-        <div>
-          <div class="player">${e.player}</div>
-          <div class="matchup">${e.matchup}</div>
+  console.log('EDGE MAP SAMPLE:', Object.keys(edgeMap).slice(0, 5));
+
+  /* ===============================
+     GROUP PROPS BY PLAYER
+  ================================ */
+  const players = {};
+  props.forEach(p => {
+    if (!players[p.player]) {
+      players[p.player] = {
+        name: p.player,
+        opponent: p.opponent,
+        props: []
+      };
+    }
+    players[p.player].props.push(p);
+  });
+
+  /* ===============================
+     RENDER UI
+  ================================ */
+  Object.values(players).forEach(player => {
+    const card = document.createElement('div');
+    card.className = 'player-card';
+
+    card.innerHTML = `
+      <div class="player-top">
+        <div class="player-left">
+          <div class="player-headshot"></div>
+          <div>
+            <div class="player-name">${player.name}</div>
+            <div class="matchup">vs ${player.opponent}</div>
+          </div>
         </div>
-        <div class="stat">${e.stat}</div>
-        <div class="line">${e.line}</div>
-        <div class="edge-badge edge-${e.grade[0]}">${e.grade}</div>`;
-      el.appendChild(d);
-    });
-  }catch{document.getElementById('edges').textContent='Edges unavailable';}
-}
+      </div>
+      <div class="props-row"></div>
+    `;
 
-loadProps();
-loadEdges();
+    const propsRow = card.querySelector('.props-row');
+
+    player.props.forEach(prop => {
+      const rawStat = prop.propType.replace('player_', '');
+      const stat = mapStatAlias(rawStat);
+
+      const edgeKey = `${player.name.toUpperCase()}-${stat}`;
+      const edge = edgeMap[edgeKey];
+
+      console.log('EDGE LOOKUP DEBUG:', edgeKey, edge);
+
+      const grade = edge?.grade || 'D';
+      const prob = edge?.probability ?? 50;
+      const hit = edge?.hitRate?.L10 ?? '–';
+      const rank = edge?.defense?.rank ?? '–';
+
+      const confClass = prob >= 62 ? 'high' : prob >= 55 ? 'mid' : 'low';
+      const rankClass =
+        rank === '–' ? '' :
+        rank <= 10 ? 'rank-bad' :
+        rank <= 20 ? 'rank-neutral' :
+                     'rank-good';
+
+      const box = document.createElement('div');
+      box.className = 'prop-box';
+      box.innerHTML = `
+        <div class="grade-badge grade-${grade}">${grade}</div>
+        <div class="prop-label">${stat}</div>
+        <div class="prop-value">${prop.line}</div>
+        <div class="confidence-bar">
+          <div class="confidence-fill ${confClass}" style="width:${prob}%"></div>
+        </div>
+        <div class="dropdown">
+          <button class="dropdown-toggle">View Edge Breakdown</button>
+          <div class="dropdown-content">
+            <div><strong>L10 Hit Rate:</strong> ${hit}%</div>
+            <div style="margin-top:6px">
+              <strong>Defense Rank:</strong>
+              <span class="rank ${rankClass}">#${rank}</span>
+            </div>
+          </div>
+        </div>
+      `;
+
+      box.querySelector('.dropdown-toggle').onclick =
+        () => box.querySelector('.dropdown').classList.toggle('open');
+
+      propsRow.appendChild(box);
+    });
+
+    container.appendChild(card);
+  });
+});
 </script>
 </body>
 </html>

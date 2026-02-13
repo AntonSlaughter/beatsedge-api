@@ -1,0 +1,14 @@
+{
+  "SAC": {
+    "team": "Sacramento Kings",
+    "defRank": 22,
+    "ppgAllowed": 118.5,
+    "positions": {
+      "PG": { "points": 24.8, "assists": 8.2, "rebounds": 4.1, "rank": 28 },
+      "SG": { "points": 22.3, "assists": 4.5, "rebounds": 5.2, "rank": 25 },
+      "SF": { "points": 19.8, "assists": 3.8, "rebounds": 6.5, "rank": 18 },
+      "PF": { "points": 18.5, "assists": 3.2, "rebounds": 8.2, "rank": 15 },
+      "C":  { "points": 16.2, "assists": 2.8, "rebounds": 12.5, "rank": 12 }
+    }
+  }
+}

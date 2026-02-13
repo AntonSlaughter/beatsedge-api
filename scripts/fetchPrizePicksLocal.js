@@ -1,54 +1,70 @@
-const fs = require('fs')
-const path = require('path')
+const fs = require('fs');
+const path = require('path');
 
-console.log('🟡 PrizePicks fetcher loaded')
+const SOURCE_FILE = path.join(__dirname, '../rawPrizePicksResponse.json');
+const OUTPUT_FILE = path.join(__dirname, '../prizepicksProps.json');
 
-// Absolute path to the file in project root
-const FILE_PATH = path.resolve(process.cwd(), 'prizepicksProps.json')
-
-async function fetchPrizePicksProps() {
-  console.log('🟡 Loading PrizePicks projections from file...')
-  console.log('📁 File path:', FILE_PATH)
-
-  if (!fs.existsSync(FILE_PATH)) {
-    throw new Error('prizepicksProps.json not found')
+/**
+ * INTERNAL: builds prizepicksProps.json from raw snapshot
+ */
+function buildPrizePicksProps() {
+  if (!fs.existsSync(SOURCE_FILE)) {
+    console.error('❌ Missing rawPrizePicksResponse.json');
+    return [];
   }
 
-  const raw = fs.readFileSync(FILE_PATH, 'utf-8')
-  const json = JSON.parse(raw)
+  const raw = JSON.parse(fs.readFileSync(SOURCE_FILE, 'utf8'));
 
-  if (!json || typeof json !== 'object') {
-    throw new Error('Invalid JSON in prizepicksProps.json')
-  }
+  const projections = raw.data || [];
+  const included = raw.included || [];
 
-  // Handle both possible structures safely
-  const data =
-    Array.isArray(json.data) ? json.data :
-    Array.isArray(json) ? json :
-    null
+  const playersById = {};
+  included
+    .filter(i => i.type === 'new_player')
+    .forEach(p => {
+      playersById[p.id] = p.attributes.display_name;
+    });
 
-  if (!data || !data.length) {
-    throw new Error('No projections found in PrizePicks JSON')
-  }
+  const results = [];
 
-  console.log('🟢 Raw projections loaded:', data.length)
+  projections.forEach(p => {
+    if (p.type !== 'projection') return;
 
-  // Normalize for BeatsEdge
-  const props = data.map(p => ({
-    player: p.player || p.attributes?.player_name,
-    propType: p.propType || `player_${p.attributes?.stat_type?.toLowerCase()}`,
-    line: p.line ?? p.attributes?.line_score,
-    opponent: p.opponent || p.attributes?.opponent
-  }))
-  .filter(p =>
-    p.player &&
-    p.propType &&
-    typeof p.line === 'number'
-  )
+    const playerId = p.relationships?.new_player?.data?.id;
+    const player = playersById[playerId];
+    if (!player) return;
 
-  console.log('🟢 Normalized props:', props.length)
+    results.push({
+      player,
+      propType: `player_${p.attributes.stat_type}`,
+      line: p.attributes.line_score,
+      opponent: p.attributes.opponent || 'UNK'
+    });
+  });
 
-  return props
+  fs.writeFileSync(OUTPUT_FILE, JSON.stringify(results, null, 2));
+  console.log(`✅ Saved ${results.length} props`);
+
+  return results;
 }
 
-module.exports = { fetchPrizePicksProps }
+/**
+ * PUBLIC: used by server.js
+ */
+function fetchPrizePicksProps() {
+  if (!fs.existsSync(OUTPUT_FILE)) return [];
+  return JSON.parse(fs.readFileSync(OUTPUT_FILE, 'utf8'));
+}
+
+/**
+ * Allow CLI execution:
+ * node scripts/fetchPrizePicksLocal.js
+ */
+if (require.main === module) {
+  buildPrizePicksProps();
+}
+
+module.exports = {
+  fetchPrizePicksProps,
+  buildPrizePicksProps
+};

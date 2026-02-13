@@ -1,238 +1,105 @@
-require('dotenv').config()
+require('dotenv').config();
+const express = require('express');
+const cors = require('cors');
+const fs = require('fs');
+const path = require('path');
 
-/* ================= CORE IMPORTS ================= */
-const express = require('express')
-const path = require('path')
-const { execFile } = require('child_process')
+const app = express();
+app.use(cors());
+app.use(express.json());
 
-/* ================= INTERNAL MODULES ================= */
-const { fetchPrizePicksProps } = require('./scripts/fetchPrizePicksLocal')
-const { calculateHitRate } = require('./hitRateEngine')
-const { adjustProbability } = require('./defenseAdjuster')
-const { adjustForLocation } = require('./locationAdjuster')
-const { adjustForMinutes } = require('./minutesAdjuster')
-const { buildPrizePicksSlip } = require('./prizePicksSlipBuilder')
-const { resolvePlayerId } = require('./playerResolver')
+const PORT = process.env.PORT || 3000;
 
-/* ================= DATA ================= */
-const defenseRanks = require('./defenseRanks.json')
+console.log('🟡 PrizePicks fetcher loaded');
 
-/* ================= APP SETUP ================= */
-const app = express()
-const PORT = process.env.PORT || 8080
-const PYTHON_CMD = process.env.PYTHON_CMD || 'python'
-const DISABLE_EDGES = process.env.DISABLE_EDGES === 'true'
-
-/* ================= MIDDLEWARE ================= */
-app.use(express.json())
-app.use(express.static(path.join(__dirname, 'public')))
-
-// 🚫 Disable API caching (important for live testing)
-app.use('/api', (_, res, next) => {
-  res.setHeader('Cache-Control', 'no-store')
-  next()
-})
-
-/* ================= ROUTES ================= */
-app.get('/', (_, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'))
-})
-
-app.get('/api/health', (_, res) => {
-  res.json({ status: 'ok' })
-})
-
-/* ================= CACHE ================= */
-const PLAYER_TTL = 10 * 60 * 1000
-const EDGES_TTL = 5 * 60 * 1000
-
-const playerGameCache = {}
-
-let edgesCache = {
-  data: [],
-  timestamp: 0,
-  building: false
-}
-
-global.cachedEdges = []
-
-/* ================= UTILITIES ================= */
-const sleep = ms => new Promise(r => setTimeout(r, ms))
-
-function getConfidenceGrade(prob) {
-  if (prob >= 0.65) return 'A+'
-  if (prob >= 0.62) return 'A'
-  if (prob >= 0.58) return 'B'
-  if (prob >= 0.54) return 'C'
-  return 'D'
-}
-
-/* ================= NBA STATS (PYTHON) ================= */
-// nba_stats.py expects (player_name, game_count)
-function getPlayerGames(playerName, count = 10) {
-  const cacheKey = `${playerName}:${count}`
-  const cached = playerGameCache[cacheKey]
-  const now = Date.now()
-
-  if (cached && now - cached.timestamp < PLAYER_TTL) {
-    return Promise.resolve(cached.games)
-  }
-
-  return new Promise((resolve, reject) => {
-    execFile(
-      PYTHON_CMD,
-      [path.join(__dirname, 'nba_stats.py'), playerName, String(count)],
-      (err, stdout) => {
-        if (err) {
-          console.error('❌ PYTHON ERROR:', err.message)
-          return reject(err)
-        }
-
-        try {
-          const games = JSON.parse(stdout)
-          playerGameCache[cacheKey] = { games, timestamp: now }
-          resolve(games)
-        } catch {
-          reject(new Error('Invalid NBA stats JSON'))
-        }
-      }
-    )
-  })
-}
-
-/* ================= PLAYER PROPS ================= */
-app.get('/api/player-props', async (_, res) => {
+/* =====================================================
+   LOAD PROPS FROM LOCAL FILE (Railway-safe)
+===================================================== */
+function loadPrizePicksFromFile() {
   try {
-    const props = await fetchPrizePicksProps()
-    res.json(props)
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
-})
+    console.log('🟡 Loading PrizePicks projections from file...');
 
-/* ================= EDGE BUILDER ================= */
-async function buildEdges() {
-  if (DISABLE_EDGES) {
-    console.log('⚠️ Edge building disabled via env')
-    return
-  }
+    const filePath = path.join(__dirname, 'prizepicksProps.json');
+    console.log('📁 File path:', filePath);
 
-  if (edgesCache.building) return
-  edgesCache.building = true
-
-  try {
-    const props = await fetchPrizePicksProps()
-    const edges = []
-
-    console.log('🔨 Building edges from props:', props.length)
-
-    const statFnMap = {
-      player_points: g => g.points,
-      player_rebounds: g => g.rebounds,
-      player_assists: g => g.assists,
-      player_points_rebounds_assists: g => g.points + g.rebounds + g.assists,
-      player_points_rebounds: g => g.points + g.rebounds,
-      player_points_assists: g => g.points + g.assists,
-      player_rebounds_assists: g => g.rebounds + g.assists
+    if (!fs.existsSync(filePath)) {
+      console.log('⚠️ prizepicksProps.json not found');
+      return [];
     }
 
-    for (const prop of props.slice(0, 15)) {
-      if (!prop.player || !prop.propType || prop.line == null) continue
+    const raw = fs.readFileSync(filePath, 'utf8');
+    const json = JSON.parse(raw);
 
-      const playerId = await resolvePlayerId(prop.player)
-      if (!playerId) continue
+    console.log('🟢 Raw projections loaded:', json.length);
 
-      const games = await getPlayerGames(prop.player, 10)
-      const activeGames = games.filter(g => (g.minutes || 0) > 0)
+    // Normalize structure
+    const normalized = json.map(p => ({
+      player: p.player,
+      stat: p.stat,
+      line: Number(p.line)
+    }));
 
-      if (activeGames.length < 3) continue
+    console.log('🟢 Normalized props:', normalized.length);
 
-      const statFn = statFnMap[prop.propType]
-      if (!statFn) continue
+    return normalized;
 
-      const { hitRate } = calculateHitRate(
-        activeGames,
-        statFn,
-        prop.line
-      )
-
-      if (!hitRate || hitRate < 0.48) continue
-
-      const defenseRank =
-        defenseRanks[prop.opponent]?.[prop.propType] ?? 30
-
-      let prob = adjustProbability(hitRate, defenseRank)
-      prob = adjustForLocation(prob, activeGames[0]?.isHome === true)
-
-      const avgMinutes =
-        activeGames.reduce((s, g) => s + g.minutes, 0) /
-        activeGames.length
-
-      prob = adjustForMinutes(prob, avgMinutes)
-
-      edges.push({
-        player: prop.player,
-        propType: prop.propType,
-        line: prop.line,
-        bookmaker: 'prizepicks',
-        modelProb: Number(prob.toFixed(3)),
-        confidence: getConfidenceGrade(prob)
-      })
-
-      await sleep(120)
-    }
-
-    edgesCache.data = edges
-    edgesCache.timestamp = Date.now()
-    global.cachedEdges = edges
-
-    console.log(`✅ Edges built: ${edges.length}`)
   } catch (err) {
-    console.error('❌ Edge build failed:', err.message)
-  } finally {
-    edgesCache.building = false
+    console.error('❌ Failed to load projections:', err.message);
+    return [];
   }
 }
 
-/* ================= EDGE API ================= */
-app.get('/api/edges/today', (_, res) => {
-  const now = Date.now()
+/* =====================================================
+   SIMPLE EDGE ENGINE (Node-only, safe)
+===================================================== */
+function buildEdges(props) {
+  console.log('🔨 Building edges from props:', props.length);
 
-  if (
-    edgesCache.data.length &&
-    now - edgesCache.timestamp < EDGES_TTL
-  ) {
-    return res.json(edgesCache.data)
+  if (!Array.isArray(props) || props.length === 0) {
+    return [];
   }
 
-  buildEdges()
-  res.json(edgesCache.data)
-})
+  const edges = props.map(p => {
+    return {
+      player: p.player,
+      stat: p.stat,
+      line: p.line,
+      probability: 50,
+      edge: 0,
+      grade: 'C'
+    };
+  });
 
-/* ================= PRIZEPICKS SLIPS ================= */
-app.get('/api/prizepicks/slips', (req, res) => {
-  const legs = parseInt(req.query.legs || '2', 10)
+  console.log('✅ Edges built:', edges.length);
+  return edges;
+}
 
-  if (!global.cachedEdges.length) {
-    return res.status(400).json({ error: 'Edges not built yet' })
-  }
+/* =====================================================
+   ROUTES
+===================================================== */
 
-  const slip = buildPrizePicksSlip(global.cachedEdges, legs)
-  if (!slip) {
-    return res.status(400).json({ error: 'Not enough eligible props' })
-  }
+app.get('/api/test', (req, res) => {
+  res.json({ ok: true });
+});
 
-  res.json(slip)
-})
+app.get('/api/player-props', (req, res) => {
+  const props = loadPrizePicksFromFile();
+  res.json(props);
+});
 
-/* ================= BACKGROUND REFRESH ================= */
-setInterval(() => {
-  if (!edgesCache.building && !DISABLE_EDGES) buildEdges()
-}, 60 * 60 * 1000)
+app.get('/api/edges/today', (req, res) => {
+  console.log('🚨 /api/edges/today HIT');
 
-/* ================= START ================= */
-if (!DISABLE_EDGES) buildEdges()
+  const props = loadPrizePicksFromFile();
+  const edges = buildEdges(props);
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 BeatsEdge running on port ${PORT}`)
-})
+  res.json(edges);
+});
+
+/* =====================================================
+   START SERVER
+===================================================== */
+
+app.listen(PORT, () => {
+  console.log('🚀 BeatsEdge running on port', PORT);
+});
