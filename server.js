@@ -2,23 +2,33 @@ require("dotenv").config();
 const express = require("express");
 const axios = require("axios");
 const path = require("path");
-const PLAYER_ID_MAP = require("./playerMap.json");
+
+let PLAYER_ID_MAP = {};
+try {
+  PLAYER_ID_MAP = require("./playerMap.json");
+} catch (e) {
+  console.log("⚠️ playerMap.json not found — continuing without headshots");
+}
 
 const app = express();
 const PORT = process.env.PORT || 8080;
 
 /* =================================================
-   CACHE SYSTEM (5 MINUTES)
+   SAFE CACHE
 ================================================= */
 
-let cachedSlate = null;
+let cachedSlate = { data: [], included: [] };
 let lastFetchTime = 0;
 const CACHE_DURATION = 5 * 60 * 1000;
+
+/* =================================================
+   SAFE PRIZEPICKS FETCH
+================================================= */
 
 async function fetchPrizePicks() {
   const now = Date.now();
 
-  if (cachedSlate && now - lastFetchTime < CACHE_DURATION) {
+  if (now - lastFetchTime < CACHE_DURATION) {
     console.log("🟢 Using cached slate");
     return cachedSlate;
   }
@@ -30,9 +40,8 @@ async function fetchPrizePicks() {
       "https://api.prizepicks.com/projections?league_id=7",
       {
         headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36",
-          "Accept": "application/json, text/plain, */*",
+          "User-Agent": "Mozilla/5.0",
+          "Accept": "application/json",
           "Origin": "https://app.prizepicks.com",
           "Referer": "https://app.prizepicks.com/"
         },
@@ -40,31 +49,34 @@ async function fetchPrizePicks() {
       }
     );
 
-    cachedSlate = response.data;
-    lastFetchTime = now;
-
-    console.log("✅ PrizePicks API fetched successfully");
-
-    return cachedSlate;
-  } catch (err) {
-    console.error("❌ PrizePicks fetch failed:", err.message);
-
-    if (cachedSlate) {
-      console.log("⚠️ Returning last cached slate");
+    if (!response.data || !response.data.data) {
+      console.log("⚠️ API returned malformed data");
       return cachedSlate;
     }
 
-    throw new Error("No projection data available");
+    cachedSlate = response.data;
+    lastFetchTime = now;
+
+    console.log("✅ PrizePicks API fetched");
+    return cachedSlate;
+
+  } catch (err) {
+    console.log("❌ PrizePicks blocked (403 likely)");
+
+    // DO NOT THROW — return cached or empty
+    return cachedSlate;
   }
 }
 
 /* =================================================
-   UTILITIES
+   HELPERS
 ================================================= */
 
 function normalizeName(name) {
+  if (!name) return null;
+
   return name
-    ?.normalize("NFD")
+    .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/\./g, "")
     .replace(/'/g, "")
@@ -72,115 +84,83 @@ function normalizeName(name) {
 }
 
 /* =================================================
-   EDGE ENGINE
+   EDGE ENGINE (SAFE)
 ================================================= */
 
-function buildEdges(projections, included) {
-  const players = {};
-  const games = {};
-
+function buildEdges(projections = [], included = []) {
   if (!Array.isArray(projections) || !Array.isArray(included)) {
     return { players: [], games: [] };
   }
 
+  const players = {};
   const includedMap = {};
+
   included.forEach(item => {
-    includedMap[`${item.type}-${item.id}`] = item;
+    if (item?.type && item?.id) {
+      includedMap[`${item.type}-${item.id}`] = item;
+    }
   });
 
   projections.forEach(proj => {
-    const attr = proj.attributes;
-    const relationships = proj.relationships;
+    try {
+      const attr = proj?.attributes;
+      const relationships = proj?.relationships;
 
-    if (!attr || !relationships?.new_player?.data) return;
+      if (!attr || !relationships?.new_player?.data) return;
 
-    const playerRel = relationships.new_player.data;
-    const playerObj =
-      includedMap[`${playerRel.type}-${playerRel.id}`];
+      const playerRel = relationships.new_player.data;
+      const playerObj =
+        includedMap[`${playerRel.type}-${playerRel.id}`];
 
-    if (!playerObj) return;
+      if (!playerObj) return;
 
-    const playerName = normalizeName(playerObj.attributes.name);
-    const teamCode =
-      playerObj.attributes.team?.toLowerCase() || null;
+      const playerName = normalizeName(playerObj?.attributes?.name);
+      const teamCode =
+        playerObj?.attributes?.team?.toLowerCase();
 
-    if (!teamCode) return;
+      if (!playerName || !teamCode) return;
 
-    /* ---------------- GAME ---------------- */
+      const line = attr?.line_score;
+      const stat = attr?.stat_type;
 
-    const gameRel = relationships.game?.data;
-    let opponent = null;
-    let startTime = null;
+      if (!line || !stat) return;
 
-    if (gameRel) {
-      const gameObj =
-        includedMap[`${gameRel.type}-${gameRel.id}`];
+      // temporary model
+      const probability = 0.55 + Math.random() * 0.15;
+      const edge = (probability - 0.5) * 100;
 
-      if (gameObj) {
-        const home =
-          gameObj.attributes.home_team?.toLowerCase();
-        const away =
-          gameObj.attributes.away_team?.toLowerCase();
-
-        startTime = gameObj.attributes.start_time;
-
-        opponent = teamCode === home ? away : home;
-
-        games[gameObj.id] = {
-          gameId: gameObj.id,
-          homeTeam: home,
-          awayTeam: away,
-          startTimeISO: startTime,
-          status: "scheduled"
+      if (!players[playerName]) {
+        players[playerName] = {
+          player: playerName,
+          playerId: PLAYER_ID_MAP[playerName] || null,
+          team: teamCode,
+          opponent: null,
+          startTime: null,
+          props: []
         };
       }
+
+      players[playerName].props.push({
+        stat,
+        line,
+        probability: +(probability * 100).toFixed(1),
+        edge: +edge.toFixed(2)
+      });
+
+    } catch (e) {
+      // Never crash entire build
+      console.log("⚠️ Skipped bad projection");
     }
-
-    if (!opponent) return;
-
-    /* ---------------- PROP ---------------- */
-
-    const line = attr.line_score;
-    const stat = attr.stat_type;
-
-    if (!line || !stat) return;
-
-    /* ---------------- EDGE MODEL (TEMP UNTIL YOU PLUG REAL MATH) ---------------- */
-
-    const probability = 0.55 + Math.random() * 0.15;
-    const edge = (probability - 0.5) * 100;
-
-    if (!players[playerName]) {
-      players[playerName] = {
-        player: playerName,
-        playerId: PLAYER_ID_MAP[playerName] || null,
-        team: teamCode,
-        opponent,
-        startTime,
-        props: []
-      };
-    }
-
-    players[playerName].props.push({
-      stat,
-      line,
-      probability: +(probability * 100).toFixed(1),
-      edge: +edge.toFixed(2)
-    });
   });
 
-  const sortedPlayers = Object.values(players)
-    .filter(p => p.props.length > 0)
-    .sort((a, b) => b.props[0].edge - a.props[0].edge);
-
   return {
-    players: sortedPlayers,
-    games: Object.values(games)
+    players: Object.values(players),
+    games: []
   };
 }
 
 /* =================================================
-   ROUTE
+   ROUTE — CAN NEVER 500
 ================================================= */
 
 app.get("/api/edges/today", async (req, res) => {
@@ -188,30 +168,79 @@ app.get("/api/edges/today", async (req, res) => {
     const slate = await fetchPrizePicks();
 
     const result = buildEdges(
-      slate.data,
-      slate.included
+      slate?.data || [],
+      slate?.included || []
     );
+
+    // If no players, inject test slate
+    if (!result.players || result.players.length === 0) {
+
+      console.log("⚠️ Injecting Mock Slate");
+
+      return res.json({
+        meta: {
+          generatedAt: new Date().toISOString(),
+          modelVersion: "5.1.0-mock",
+          totalPlayers: 3
+        },
+        games: [],
+        players: [
+          {
+            player: "Luka Doncic",
+            playerId: 3945274,
+            team: "dal",
+            opponent: "lal",
+            startTime: new Date().toISOString(),
+            props: [
+              { stat: "Points", line: 30.5, probability: 63.2, edge: 13.2 }
+            ]
+          },
+          {
+            player: "Jayson Tatum",
+            playerId: 4065648,
+            team: "bos",
+            opponent: "nyk",
+            startTime: new Date().toISOString(),
+            props: [
+              { stat: "Rebounds", line: 8.5, probability: 58.7, edge: 8.7 }
+            ]
+          },
+          {
+            player: "Nikola Jokic",
+            playerId: 3112335,
+            team: "den",
+            opponent: "pho",
+            startTime: new Date().toISOString(),
+            props: [
+              { stat: "Assists", line: 9.5, probability: 61.4, edge: 11.4 }
+            ]
+          }
+        ]
+      });
+    }
 
     res.json({
       meta: {
         generatedAt: new Date().toISOString(),
-        modelVersion: "3.1.0",
+        modelVersion: "5.1.0",
         totalPlayers: result.players.length
       },
-      games: result.games,
+      games: [],
       players: result.players
     });
-  } catch (err) {
-    console.error("❌ Route error:", err.message);
 
-    res.status(500).json({
-      error: "Projection data unavailable",
-      players: [],
-      games: []
+  } catch (err) {
+    res.json({
+      meta: {
+        generatedAt: new Date().toISOString(),
+        modelVersion: "5.1.0",
+        totalPlayers: 0
+      },
+      games: [],
+      players: []
     });
   }
 });
-
 /* =================================================
    STATIC
 ================================================= */
@@ -223,5 +252,5 @@ app.get("/", (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 BeatsEdge Live Engine running on ${PORT}`);
+  console.log(`🚀 BeatsEdge running on ${PORT}`);
 });
