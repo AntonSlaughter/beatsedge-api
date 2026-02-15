@@ -5,7 +5,7 @@ const path = require("path");
 const PLAYER_ID_MAP = require("./playerMap.json");
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 const PROPS_FILE = path.join(__dirname, "prizepicksProps.json");
 
 /* ================================
@@ -30,23 +30,27 @@ function gradeFromRank(rank) {
 
 function normalizeName(name) {
   return name
-    .normalize("NFD")
+    ?.normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/\./g, "")
     .replace(/'/g, "")
     .trim();
 }
 
+/* ================================
+   SAFE GAME PARSER
+================================ */
+
 function parseGameString(gameString) {
   if (!gameString || !gameString.includes("@")) {
     return {
-      team: "UNK",
-      opponent: "UNK",
+      team: "unk",
+      opponent: "unk",
       homeAway: "unknown"
     };
   }
 
-  const [away, home] = gameString.split("@").map(t => t.trim());
+  const [away, home] = gameString.split("@").map(t => t.trim().toLowerCase());
 
   return {
     team: away,
@@ -91,7 +95,8 @@ function loadProps() {
     const raw = fs.readFileSync(PROPS_FILE, "utf8");
     const data = JSON.parse(raw);
     return Array.isArray(data) ? data : [];
-  } catch {
+  } catch (err) {
+    console.error("❌ Failed loading props:", err);
     return [];
   }
 }
@@ -115,30 +120,13 @@ function buildPortfolio(props) {
 
     const usage = random(18, 30);
     const minutes = random(26, 38);
-    const last5 = random(45, 75);
     const defenseRank = randomRank();
-    const pace = random(0.92, 1.08);
-    const injuryBoost = random(0.95, 1.10);
-    const blowoutRisk = random(0, 15);
 
-    const projectedMean =
-      prop.line *
-      (usage / 22) *
-      (minutes / 32) *
-      pace *
-      injuryBoost *
-      (1 + (30 - defenseRank) / 120);
-
+    const projectedMean = prop.line * (usage / 22);
     const stdDev = prop.line * 0.25;
-
-    const probability =
-      1 - normalCDF(prop.line, projectedMean, stdDev);
+    const probability = 1 - normalCDF(prop.line, projectedMean, stdDev);
 
     if (probability <= 0.54) continue;
-
-    const edge = probability - 0.5;
-    const expectedReturn = edge * 100;
-    const kelly = probability * 2 - 1;
 
     const parsedGame = parseGameString(prop.game);
 
@@ -149,31 +137,13 @@ function buildPortfolio(props) {
       team: parsedGame.team,
       opponent: parsedGame.opponent,
       homeAway: parsedGame.homeAway,
-      game: prop.game || null,
       startTime: prop.startTime || null,
-
       probability: +(probability * 100).toFixed(1),
-      edge: +(edge * 100).toFixed(2),
-      expectedReturn: +expectedReturn.toFixed(2),
-
+      edge: +((probability - 0.5) * 100).toFixed(2),
       usage: +usage.toFixed(1),
       minutes: +minutes.toFixed(1),
-      last5HitRate: +last5.toFixed(1),
       defenseRank,
       matchupGrade: gradeFromRank(defenseRank),
-
-      paceFactor: +pace.toFixed(2),
-      injuryImpact: +injuryBoost.toFixed(2),
-      blowoutRisk: +blowoutRisk.toFixed(1),
-
-      kellyFraction: +kelly.toFixed(3),
-      confidenceTier:
-        probability > 0.65
-          ? "High"
-          : probability > 0.58
-          ? "Medium"
-          : "Low",
-
       projectedStarter: minutes >= 32
     });
   }
@@ -182,7 +152,7 @@ function buildPortfolio(props) {
 }
 
 /* ================================
-   ROUTES
+   ROUTE
 ================================ */
 
 app.get("/api/edges/today", (req, res) => {
@@ -190,7 +160,7 @@ app.get("/api/edges/today", (req, res) => {
   const positions = buildPortfolio(props);
   const now = new Date();
 
-  const players = {};
+  const playersMap = {};
   const games = {};
   const missingIds = new Set();
 
@@ -210,51 +180,30 @@ app.get("/api/edges/today", (req, res) => {
       };
     }
 
-    if (!players[p.player]) {
-      players[p.player] = {
+    if (!playersMap[p.player]) {
+      playersMap[p.player] = {
+        player: p.player,
         playerId: mappedId,
-        playerName: p.player,
         team: p.team,
         opponent: p.opponent,
-        homeAway: p.homeAway,
-        gameId,
-        position: null,
-        injuryStatus: "Healthy",
-        starting: p.projectedStarter,
-        minutesProjection: p.minutes,
-        usageProjection: p.usage,
+        startTime: p.startTime || now.toISOString(),
         props: []
       };
     }
 
-    players[p.player].props.push({
-      propId: `${p.player}-${p.stat}-${p.line}`,
-      market: p.stat,
+    playersMap[p.player].props.push({
+      stat: p.stat,
       line: p.line,
-      probabilityOver: p.probability / 100,
-      edge: p.edge,
-      confidenceTier: p.confidenceTier,
-      expectedReturn: p.expectedReturn,
-      matchupGrade: p.matchupGrade,
-      defenseRank: p.defenseRank,
-      usage: p.usage,
-      minutes: p.minutes,
-      last5HitRate: p.last5HitRate,
-      projectedStarter: p.projectedStarter,
-      paceFactor: p.paceFactor,
-      injuryImpact: p.injuryImpact,
-      blowoutRisk: p.blowoutRisk,
-      kellyFraction: p.kellyFraction
+      probability: p.probability,
+      edge: p.edge
     });
   });
 
-  Object.values(players).forEach(player => {
-    player.props.sort((a, b) => b.edge - a.edge);
-  });
-
-  const sortedPlayers = Object.values(players).sort(
+  const sortedPlayers = Object.values(playersMap).sort(
     (a, b) => b.props[0].edge - a.props[0].edge
   );
+
+  console.log("✅ Players returned:", sortedPlayers.length);
 
   if (missingIds.size > 0) {
     console.warn("⚠️ Missing ESPN IDs:");
@@ -264,7 +213,7 @@ app.get("/api/edges/today", (req, res) => {
   res.json({
     meta: {
       generatedAt: now.toISOString(),
-      modelVersion: "2.0.0",
+      modelVersion: "2.1.0",
       slateDate: now.toISOString().split("T")[0],
       totalPlayers: sortedPlayers.length
     },
