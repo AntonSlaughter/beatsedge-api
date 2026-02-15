@@ -3,37 +3,40 @@ const express = require("express");
 const axios = require("axios");
 const path = require("path");
 
+const BALL_KEY = process.env.BALLDONTLIE_API_KEY;
+const BALL_BASE = "https://api.balldontlie.io/v1";
+
 let PLAYER_ID_MAP = {};
 try {
   PLAYER_ID_MAP = require("./playerMap.json");
 } catch (e) {
-  console.log("⚠️ playerMap.json not found — continuing without headshots");
+  console.log("⚠️ playerMap.json not found — headshots disabled");
 }
 
 const app = express();
 const PORT = process.env.PORT || 8080;
 
 /* =================================================
-   SAFE CACHE
+   CACHE SYSTEMS
 ================================================= */
 
 let cachedSlate = { data: [], included: [] };
 let lastFetchTime = 0;
-const CACHE_DURATION = 5 * 60 * 1000;
+const SLATE_CACHE_DURATION = 5 * 60 * 1000;
+
+let playerStatsCache = {};
+const PLAYER_CACHE_DURATION = 6 * 60 * 60 * 1000;
 
 /* =================================================
-   SAFE PRIZEPICKS FETCH
+   PRIZEPICKS FETCH
 ================================================= */
 
 async function fetchPrizePicks() {
   const now = Date.now();
 
-  if (now - lastFetchTime < CACHE_DURATION) {
-    console.log("🟢 Using cached slate");
+  if (now - lastFetchTime < SLATE_CACHE_DURATION) {
     return cachedSlate;
   }
-
-  console.log("🔄 Fetching PrizePicks API...");
 
   try {
     const response = await axios.get(
@@ -49,22 +52,61 @@ async function fetchPrizePicks() {
       }
     );
 
-    if (!response.data || !response.data.data) {
-      console.log("⚠️ API returned malformed data");
-      return cachedSlate;
+    if (response.data?.data) {
+      cachedSlate = response.data;
+      lastFetchTime = now;
     }
 
-    cachedSlate = response.data;
-    lastFetchTime = now;
-
-    console.log("✅ PrizePicks API fetched");
     return cachedSlate;
 
   } catch (err) {
-    console.log("❌ PrizePicks blocked (403 likely)");
-
-    // DO NOT THROW — return cached or empty
+    console.log("⚠️ PrizePicks blocked — using cache");
     return cachedSlate;
+  }
+}
+
+/* =================================================
+   BALLDONTLIE FETCH (CACHED)
+================================================= */
+
+async function fetchLast10Games(playerId) {
+  if (!BALL_KEY) return null;
+
+  const now = Date.now();
+
+  if (
+    playerStatsCache[playerId] &&
+    now - playerStatsCache[playerId].timestamp < PLAYER_CACHE_DURATION
+  ) {
+    return playerStatsCache[playerId].data;
+  }
+
+  try {
+    const response = await axios.get(
+      `${BALL_BASE}/stats`,
+      {
+        params: {
+          "player_ids[]": playerId,
+          per_page: 10
+        },
+        headers: {
+          Authorization: BALL_KEY
+        }
+      }
+    );
+
+    const games = response.data?.data || [];
+
+    playerStatsCache[playerId] = {
+      timestamp: now,
+      data: games
+    };
+
+    return games;
+
+  } catch (err) {
+    console.log("BallDontLie error:", err.message);
+    return null;
   }
 }
 
@@ -74,7 +116,6 @@ async function fetchPrizePicks() {
 
 function normalizeName(name) {
   if (!name) return null;
-
   return name
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
@@ -83,11 +124,19 @@ function normalizeName(name) {
     .trim();
 }
 
+function getStatKey(stat) {
+  const s = stat.toLowerCase();
+  if (s.includes("point")) return "pts";
+  if (s.includes("rebound")) return "reb";
+  if (s.includes("assist")) return "ast";
+  return null;
+}
+
 /* =================================================
-   EDGE ENGINE (SAFE)
+   EDGE ENGINE (ASYNC SAFE)
 ================================================= */
 
-function buildEdges(projections = [], included = []) {
+async function buildEdges(projections = [], included = []) {
   if (!Array.isArray(projections) || !Array.isArray(included)) {
     return { players: [], games: [] };
   }
@@ -101,38 +150,61 @@ function buildEdges(projections = [], included = []) {
     }
   });
 
-  projections.forEach(proj => {
+  for (const proj of projections) {
     try {
       const attr = proj?.attributes;
       const relationships = proj?.relationships;
 
-      if (!attr || !relationships?.new_player?.data) return;
+      if (!attr || !relationships?.new_player?.data) continue;
 
       const playerRel = relationships.new_player.data;
       const playerObj =
         includedMap[`${playerRel.type}-${playerRel.id}`];
 
-      if (!playerObj) return;
+      if (!playerObj) continue;
 
       const playerName = normalizeName(playerObj?.attributes?.name);
       const teamCode =
         playerObj?.attributes?.team?.toLowerCase();
 
-      if (!playerName || !teamCode) return;
+      if (!playerName || !teamCode) continue;
 
       const line = attr?.line_score;
       const stat = attr?.stat_type;
 
-      if (!line || !stat) return;
+      if (!line || !stat) continue;
 
-      // temporary model
-      const probability = 0.55 + Math.random() * 0.15;
+      let probability = 0.5;
+
+      const playerId = PLAYER_ID_MAP[playerName];
+
+      if (playerId) {
+        const games = await fetchLast10Games(playerId);
+
+        if (games && games.length > 0) {
+          const statKey = getStatKey(stat);
+
+          if (statKey) {
+            let overs = 0;
+
+            games.forEach(g => {
+              if (g[statKey] > line) overs++;
+            });
+
+            const hitRate = overs / games.length;
+
+            // smoothing factor
+            probability = (hitRate * 0.85) + 0.075;
+          }
+        }
+      }
+
       const edge = (probability - 0.5) * 100;
 
       if (!players[playerName]) {
         players[playerName] = {
           player: playerName,
-          playerId: PLAYER_ID_MAP[playerName] || null,
+          playerId: playerId || null,
           team: teamCode,
           opponent: null,
           startTime: null,
@@ -148,10 +220,9 @@ function buildEdges(projections = [], included = []) {
       });
 
     } catch (e) {
-      // Never crash entire build
-      console.log("⚠️ Skipped bad projection");
+      console.log("⚠️ Skipped projection");
     }
-  });
+  }
 
   return {
     players: Object.values(players),
@@ -160,27 +231,23 @@ function buildEdges(projections = [], included = []) {
 }
 
 /* =================================================
-   ROUTE — CAN NEVER 500
+   ROUTE
 ================================================= */
 
 app.get("/api/edges/today", async (req, res) => {
   try {
     const slate = await fetchPrizePicks();
 
-    const result = buildEdges(
+    const result = await buildEdges(
       slate?.data || [],
       slate?.included || []
     );
 
-    // If no players, inject test slate
-    if (!result.players || result.players.length === 0) {
-
-      console.log("⚠️ Injecting Mock Slate");
-
+    if (!result.players.length) {
       return res.json({
         meta: {
           generatedAt: new Date().toISOString(),
-          modelVersion: "5.1.0-mock",
+          modelVersion: "6.0.0-mock",
           totalPlayers: 3
         },
         games: [],
@@ -194,26 +261,6 @@ app.get("/api/edges/today", async (req, res) => {
             props: [
               { stat: "Points", line: 30.5, probability: 63.2, edge: 13.2 }
             ]
-          },
-          {
-            player: "Jayson Tatum",
-            playerId: 4065648,
-            team: "bos",
-            opponent: "nyk",
-            startTime: new Date().toISOString(),
-            props: [
-              { stat: "Rebounds", line: 8.5, probability: 58.7, edge: 8.7 }
-            ]
-          },
-          {
-            player: "Nikola Jokic",
-            playerId: 3112335,
-            team: "den",
-            opponent: "pho",
-            startTime: new Date().toISOString(),
-            props: [
-              { stat: "Assists", line: 9.5, probability: 61.4, edge: 11.4 }
-            ]
           }
         ]
       });
@@ -222,7 +269,7 @@ app.get("/api/edges/today", async (req, res) => {
     res.json({
       meta: {
         generatedAt: new Date().toISOString(),
-        modelVersion: "5.1.0",
+        modelVersion: "6.0.0",
         totalPlayers: result.players.length
       },
       games: [],
@@ -230,10 +277,12 @@ app.get("/api/edges/today", async (req, res) => {
     });
 
   } catch (err) {
+    console.log("Route error:", err.message);
+
     res.json({
       meta: {
         generatedAt: new Date().toISOString(),
-        modelVersion: "5.1.0",
+        modelVersion: "6.0.0",
         totalPlayers: 0
       },
       games: [],
@@ -241,6 +290,7 @@ app.get("/api/edges/today", async (req, res) => {
     });
   }
 });
+
 /* =================================================
    STATIC
 ================================================= */
