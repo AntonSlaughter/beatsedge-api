@@ -3,18 +3,29 @@ const express = require("express");
 const axios = require("axios");
 const path = require("path");
 
+const app = express();
+app.use(express.json());
+
+const PORT = process.env.PORT || 8080;
+
+/* =================================================
+   ENV
+================================================= */
+
 const BALL_KEY = process.env.BALLDONTLIE_API_KEY;
+const DISCORD_WEBHOOK = process.env.DISCORD_WEBHOOK_URL;
 const BALL_BASE = "https://api.balldontlie.io/v1";
+
+/* =================================================
+   PLAYER MAP
+================================================= */
 
 let PLAYER_ID_MAP = {};
 try {
   PLAYER_ID_MAP = require("./playerMap.json");
-} catch (e) {
-  console.log("⚠️ playerMap.json not found — headshots disabled");
+} catch {
+  console.log("⚠️ playerMap.json not found");
 }
-
-const app = express();
-const PORT = process.env.PORT || 8080;
 
 /* =================================================
    CACHE SYSTEMS
@@ -26,6 +37,64 @@ const SLATE_CACHE_DURATION = 5 * 60 * 1000;
 
 let playerStatsCache = {};
 const PLAYER_CACHE_DURATION = 6 * 60 * 60 * 1000;
+
+/* =================================================
+   MODEL PERFORMANCE TRACKING
+================================================= */
+
+let modelPerformance = {
+  total: 0,
+  wins: 0,
+  losses: 0
+};
+
+/* =================================================
+   DISCORD ALERT SYSTEM
+================================================= */
+
+const ALERT_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+const alertCache = {};
+
+async function sendDiscordAlert(player, prop) {
+  if (!DISCORD_WEBHOOK) return;
+
+  const key = `${player.player}-${prop.stat}-${prop.line}-${prop.direction}`;
+  const now = Date.now();
+
+  if (alertCache[key] && now - alertCache[key] < ALERT_COOLDOWN_MS) {
+    return;
+  }
+
+  alertCache[key] = now;
+  modelPerformance.total++;
+
+  try {
+    await axios.post(DISCORD_WEBHOOK, {
+      embeds: [
+        {
+          title: "🔥 A+ EDGE DETECTED",
+          color: 0x1db954,
+          fields: [
+            { name: "Player", value: player.player, inline: true },
+            { name: "Team", value: player.team || "N/A", inline: true },
+            { name: "Stat", value: prop.stat, inline: true },
+            { name: "Line", value: String(prop.line), inline: true },
+            { name: "Pick", value: prop.direction, inline: true },
+            { name: "Probability", value: `${prop.probability}%`, inline: true },
+            { name: "Edge", value: `${prop.edge}%`, inline: true }
+          ],
+          footer: { text: "BeatsEdge Engine v7.0" },
+          timestamp: new Date()
+        }
+      ]
+    });
+
+    console.log("✅ Discord alert sent:", player.player);
+
+  } catch (err) {
+    console.log("❌ Discord error:", err.message);
+  }
+}
 
 /* =================================================
    PRIZEPICKS FETCH
@@ -44,9 +113,9 @@ async function fetchPrizePicks() {
       {
         headers: {
           "User-Agent": "Mozilla/5.0",
-          "Accept": "application/json",
-          "Origin": "https://app.prizepicks.com",
-          "Referer": "https://app.prizepicks.com/"
+          Accept: "application/json",
+          Origin: "https://app.prizepicks.com",
+          Referer: "https://app.prizepicks.com/"
         },
         timeout: 10000
       }
@@ -59,14 +128,14 @@ async function fetchPrizePicks() {
 
     return cachedSlate;
 
-  } catch (err) {
+  } catch {
     console.log("⚠️ PrizePicks blocked — using cache");
     return cachedSlate;
   }
 }
 
 /* =================================================
-   BALLDONTLIE FETCH (CACHED)
+   BALLDONTLIE FETCH
 ================================================= */
 
 async function fetchLast10Games(playerId) {
@@ -82,18 +151,13 @@ async function fetchLast10Games(playerId) {
   }
 
   try {
-    const response = await axios.get(
-      `${BALL_BASE}/stats`,
-      {
-        params: {
-          "player_ids[]": playerId,
-          per_page: 10
-        },
-        headers: {
-          Authorization: BALL_KEY
-        }
-      }
-    );
+    const response = await axios.get(`${BALL_BASE}/stats`, {
+      params: {
+        "player_ids[]": playerId,
+        per_page: 10
+      },
+      headers: { Authorization: BALL_KEY }
+    });
 
     const games = response.data?.data || [];
 
@@ -133,13 +197,10 @@ function getStatKey(stat) {
 }
 
 /* =================================================
-   EDGE ENGINE (ASYNC SAFE)
+   EDGE ENGINE
 ================================================= */
 
 async function buildEdges(projections = [], included = []) {
-  if (!Array.isArray(projections) || !Array.isArray(included)) {
-    return { players: [], games: [] };
-  }
 
   const players = {};
   const includedMap = {};
@@ -152,143 +213,148 @@ async function buildEdges(projections = [], included = []) {
 
   for (const proj of projections) {
     try {
+
       const attr = proj?.attributes;
-      const relationships = proj?.relationships;
+      const rel = proj?.relationships?.new_player?.data;
+      if (!attr || !rel) continue;
 
-      if (!attr || !relationships?.new_player?.data) continue;
-
-      const playerRel = relationships.new_player.data;
-      const playerObj =
-        includedMap[`${playerRel.type}-${playerRel.id}`];
-
+      const playerObj = includedMap[`${rel.type}-${rel.id}`];
       if (!playerObj) continue;
 
       const playerName = normalizeName(playerObj?.attributes?.name);
-      const teamCode =
-        playerObj?.attributes?.team?.toLowerCase();
-
-      if (!playerName || !teamCode) continue;
-
+      const teamCode = playerObj?.attributes?.team?.toLowerCase();
       const line = attr?.line_score;
       const stat = attr?.stat_type;
 
-      if (!line || !stat) continue;
+      if (!playerName || !teamCode || !line || !stat) continue;
 
       let probability = 0.5;
-
       const playerId = PLAYER_ID_MAP[playerName];
 
       if (playerId) {
         const games = await fetchLast10Games(playerId);
+        const statKey = getStatKey(stat);
 
-        if (games && games.length > 0) {
-          const statKey = getStatKey(stat);
+        if (games?.length && statKey) {
+          let overs = 0;
+          games.forEach(g => {
+            if (g[statKey] > line) overs++;
+          });
 
-          if (statKey) {
-            let overs = 0;
-
-            games.forEach(g => {
-              if (g[statKey] > line) overs++;
-            });
-
-            const hitRate = overs / games.length;
-
-            // smoothing factor
-            probability = (hitRate * 0.85) + 0.075;
-          }
+          const hitRate = overs / games.length;
+          probability = (hitRate * 0.85) + 0.075;
         }
       }
 
-      const edge = (probability - 0.5) * 100;
+      /* ===== OVER / UNDER DETECTION ===== */
+
+      let overProb = probability;
+      let underProb = 1 - overProb;
+
+      let overEdge = (overProb - 0.5) * 100;
+      let underEdge = (underProb - 0.5) * 100;
+
+      let finalDirection = "OVER";
+      let finalProb = overProb;
+      let finalEdge = overEdge;
+
+      if (Math.abs(underEdge) > Math.abs(overEdge)) {
+        finalDirection = "UNDER";
+        finalProb = underProb;
+        finalEdge = underEdge;
+      }
 
       if (!players[playerName]) {
         players[playerName] = {
           player: playerName,
           playerId: playerId || null,
           team: teamCode,
-          opponent: null,
-          startTime: null,
           props: []
         };
       }
 
-      players[playerName].props.push({
+      const propObj = {
         stat,
         line,
-        probability: +(probability * 100).toFixed(1),
-        edge: +edge.toFixed(2)
-      });
+        direction: finalDirection,
+        probability: +(finalProb * 100).toFixed(1),
+        edge: +finalEdge.toFixed(2)
+      };
 
-    } catch (e) {
+      players[playerName].props.push(propObj);
+
+      if (propObj.edge >= 15) {
+        await sendDiscordAlert(players[playerName], propObj);
+      }
+
+    } catch {
       console.log("⚠️ Skipped projection");
     }
   }
 
-  return {
-    players: Object.values(players),
-    games: []
-  };
+  return Object.values(players);
 }
 
 /* =================================================
-   ROUTE
+   ROUTES
 ================================================= */
 
 app.get("/api/edges/today", async (req, res) => {
   try {
-    const slate = await fetchPrizePicks();
 
-    const result = await buildEdges(
+    const slate = await fetchPrizePicks();
+    const players = await buildEdges(
       slate?.data || [],
       slate?.included || []
     );
 
-    if (!result.players.length) {
-      return res.json({
-        meta: {
-          generatedAt: new Date().toISOString(),
-          modelVersion: "6.0.0-mock",
-          totalPlayers: 3
-        },
-        games: [],
-        players: [
-          {
-            player: "Luka Doncic",
-            playerId: 3945274,
-            team: "dal",
-            opponent: "lal",
-            startTime: new Date().toISOString(),
-            props: [
-              { stat: "Points", line: 30.5, probability: 63.2, edge: 13.2 }
-            ]
-          }
-        ]
+    let allProps = [];
+
+    players.forEach(p => {
+      p.props.forEach(prop => {
+        allProps.push({ player: p.player, team: p.team, ...prop });
       });
-    }
+    });
+
+    allProps.sort((a,b) => Math.abs(b.edge) - Math.abs(a.edge));
+    const bestThree = allProps.slice(0,3);
 
     res.json({
       meta: {
         generatedAt: new Date().toISOString(),
-        modelVersion: "6.0.0",
-        totalPlayers: result.players.length
+        modelVersion: "7.0.0",
+        totalPlayers: players.length
       },
+      bestThree,
       games: [],
-      players: result.players
+      players
     });
 
   } catch (err) {
     console.log("Route error:", err.message);
-
-    res.json({
-      meta: {
-        generatedAt: new Date().toISOString(),
-        modelVersion: "6.0.0",
-        totalPlayers: 0
-      },
-      games: [],
-      players: []
-    });
+    res.status(500).json({ error: "Projection data unavailable" });
   }
+});
+
+/* ===== Record Result ===== */
+
+app.post("/api/result", (req, res) => {
+
+  const { outcome } = req.body;
+
+  if (outcome === "win") modelPerformance.wins++;
+  if (outcome === "loss") modelPerformance.losses++;
+
+  res.json({
+    message: "Result recorded",
+    performance: {
+      ...modelPerformance,
+      winRate:
+        modelPerformance.total > 0
+          ? ((modelPerformance.wins / modelPerformance.total) * 100).toFixed(1) + "%"
+          : "0%"
+    }
+  });
 });
 
 /* =================================================
