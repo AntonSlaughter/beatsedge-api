@@ -251,7 +251,6 @@ app.post(
 app.get(
   "/api/edges/premium",
   authenticateUser,
-  requirePremium,
   (req, res) => {
 
     const samplePlay = {
