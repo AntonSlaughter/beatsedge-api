@@ -1,372 +1,297 @@
 require("dotenv").config();
 const express = require("express");
 const axios = require("axios");
-const path = require("path");
+const jwt = require("jsonwebtoken");
+const bcrypt = require("bcryptjs");
+const sqlite3 = require("sqlite3").verbose();
+const Stripe = require("stripe");
 
 const app = express();
-app.use(express.json());
-
-const PORT = process.env.PORT || 8080;
 
 /* =================================================
    ENV
 ================================================= */
 
+const PORT = process.env.PORT || 8080;
+const JWT_SECRET = process.env.JWT_SECRET;
 const BALL_KEY = process.env.BALLDONTLIE_API_KEY;
-const DISCORD_WEBHOOK = process.env.DISCORD_WEBHOOK_URL;
-const BALL_BASE = "https://api.balldontlie.io/v1";
+const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
+const STRIPE_PRICE_ID = process.env.STRIPE_PRICE_ID;
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
+
+const stripe = Stripe(STRIPE_SECRET_KEY);
 
 /* =================================================
-   PLAYER MAP
+   STRIPE WEBHOOK (RAW BODY REQUIRED)
 ================================================= */
 
-let PLAYER_ID_MAP = {};
-try {
-  PLAYER_ID_MAP = require("./playerMap.json");
-} catch {
-  console.log("⚠️ playerMap.json not found");
-}
+app.post(
+  "/api/stripe/webhook",
+  express.raw({ type: "application/json" }),
+  (req, res) => {
+    const sig = req.headers["stripe-signature"];
+    let event;
 
-/* =================================================
-   CACHE SYSTEMS
-================================================= */
-
-let cachedSlate = { data: [], included: [] };
-let lastFetchTime = 0;
-const SLATE_CACHE_DURATION = 5 * 60 * 1000;
-
-let playerStatsCache = {};
-const PLAYER_CACHE_DURATION = 6 * 60 * 60 * 1000;
-
-/* =================================================
-   MODEL PERFORMANCE TRACKING
-================================================= */
-
-let modelPerformance = {
-  total: 0,
-  wins: 0,
-  losses: 0
-};
-
-/* =================================================
-   DISCORD ALERT SYSTEM
-================================================= */
-
-const ALERT_COOLDOWN_MS = 6 * 60 * 60 * 1000;
-const alertCache = {};
-
-async function sendDiscordAlert(player, prop) {
-  if (!DISCORD_WEBHOOK) return;
-
-  const key = `${player.player}-${prop.stat}-${prop.line}-${prop.direction}`;
-  const now = Date.now();
-
-  if (alertCache[key] && now - alertCache[key] < ALERT_COOLDOWN_MS) {
-    return;
-  }
-
-  alertCache[key] = now;
-  modelPerformance.total++;
-
-  try {
-    await axios.post(DISCORD_WEBHOOK, {
-      embeds: [
-        {
-          title: "🔥 A+ EDGE DETECTED",
-          color: 0x1db954,
-          fields: [
-            { name: "Player", value: player.player, inline: true },
-            { name: "Team", value: player.team || "N/A", inline: true },
-            { name: "Stat", value: prop.stat, inline: true },
-            { name: "Line", value: String(prop.line), inline: true },
-            { name: "Pick", value: prop.direction, inline: true },
-            { name: "Probability", value: `${prop.probability}%`, inline: true },
-            { name: "Edge", value: `${prop.edge}%`, inline: true }
-          ],
-          footer: { text: "BeatsEdge Engine v7.0" },
-          timestamp: new Date()
-        }
-      ]
-    });
-
-    console.log("✅ Discord alert sent:", player.player);
-
-  } catch (err) {
-    console.log("❌ Discord error:", err.message);
-  }
-}
-
-/* =================================================
-   PRIZEPICKS FETCH
-================================================= */
-
-async function fetchPrizePicks() {
-  const now = Date.now();
-
-  if (now - lastFetchTime < SLATE_CACHE_DURATION) {
-    return cachedSlate;
-  }
-
-  try {
-    const response = await axios.get(
-      "https://api.prizepicks.com/projections?league_id=7",
-      {
-        headers: {
-          "User-Agent": "Mozilla/5.0",
-          Accept: "application/json",
-          Origin: "https://app.prizepicks.com",
-          Referer: "https://app.prizepicks.com/"
-        },
-        timeout: 10000
-      }
-    );
-
-    if (response.data?.data) {
-      cachedSlate = response.data;
-      lastFetchTime = now;
+    try {
+      event = stripe.webhooks.constructEvent(
+        req.body,
+        sig,
+        STRIPE_WEBHOOK_SECRET
+      );
+    } catch (err) {
+      console.error("Webhook signature failed.");
+      return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
-    return cachedSlate;
+    if (event.type === "checkout.session.completed") {
+      const session = event.data.object;
+      const customerId = session.customer;
 
+      db.run(
+        `UPDATE users SET subscription = 'premium'
+         WHERE stripe_customer_id = ?`,
+        [customerId]
+      );
+
+      console.log("User upgraded to premium.");
+    }
+
+    if (event.type === "customer.subscription.deleted") {
+      const subscription = event.data.object;
+      const customerId = subscription.customer;
+
+      db.run(
+        `UPDATE users SET subscription = 'free'
+         WHERE stripe_customer_id = ?`,
+        [customerId]
+      );
+
+      console.log("User downgraded to free.");
+    }
+
+    res.json({ received: true });
+  }
+);
+
+/* =================================================
+   JSON PARSER (AFTER WEBHOOK)
+================================================= */
+
+app.use(express.json());
+
+/* =================================================
+   DATABASE
+================================================= */
+
+const db = new sqlite3.Database("./beatsedge.db");
+
+db.serialize(() => {
+  db.run(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email TEXT UNIQUE,
+      password TEXT,
+      subscription TEXT DEFAULT 'free',
+      stripe_customer_id TEXT
+    )
+  `);
+});
+
+/* =================================================
+   AUTH ROUTES
+================================================= */
+
+app.post("/api/auth/register", async (req, res) => {
+  const { email, password } = req.body;
+
+  if (!email || !password)
+    return res.status(400).json({ error: "Missing fields" });
+
+  const hashed = await bcrypt.hash(password, 10);
+
+  db.run(
+    `INSERT INTO users (email, password) VALUES (?, ?)`,
+    [email, hashed],
+    function (err) {
+      if (err)
+        return res.status(400).json({ error: "User already exists" });
+
+      res.json({ message: "User registered" });
+    }
+  );
+});
+
+app.post("/api/auth/login", (req, res) => {
+  const { email, password } = req.body;
+
+  db.get(
+    `SELECT * FROM users WHERE email = ?`,
+    [email],
+    async (err, user) => {
+      if (!user)
+        return res.status(400).json({ error: "Invalid credentials" });
+
+      const match = await bcrypt.compare(password, user.password);
+      if (!match)
+        return res.status(400).json({ error: "Invalid credentials" });
+
+      const token = jwt.sign(
+        { id: user.id, email: user.email },
+        JWT_SECRET,
+        { expiresIn: "7d" }
+      );
+
+      res.json({ token });
+    }
+  );
+});
+
+/* =================================================
+   AUTH MIDDLEWARE
+================================================= */
+
+function authenticateUser(req, res, next) {
+  const header = req.headers.authorization;
+  if (!header)
+    return res.status(401).json({ error: "No token provided" });
+
+  const token = header.split(" ")[1];
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+
+    db.get(
+      `SELECT * FROM users WHERE id = ?`,
+      [decoded.id],
+      (err, user) => {
+        if (!user)
+          return res.status(401).json({ error: "User not found" });
+
+        req.user = user;
+        next();
+      }
+    );
   } catch {
-    console.log("⚠️ PrizePicks blocked — using cache");
-    return cachedSlate;
+    return res.status(403).json({ error: "Invalid token" });
   }
 }
 
+function requirePremium(req, res, next) {
+  if (req.user.subscription !== "premium")
+    return res.status(403).json({ error: "Premium required" });
+
+  next();
+}
+
 /* =================================================
-   BALLDONTLIE FETCH
+   STRIPE CHECKOUT
 ================================================= */
 
-async function fetchLast10Games(playerId) {
-  if (!BALL_KEY) return null;
+app.post(
+  "/api/stripe/create-checkout",
+  authenticateUser,
+  async (req, res) => {
+    try {
+      let customerId = req.user.stripe_customer_id;
 
-  const now = Date.now();
+      if (!customerId) {
+        const customer = await stripe.customers.create({
+          email: req.user.email
+        });
 
-  if (
-    playerStatsCache[playerId] &&
-    now - playerStatsCache[playerId].timestamp < PLAYER_CACHE_DURATION
-  ) {
-    return playerStatsCache[playerId].data;
+        customerId = customer.id;
+
+        db.run(
+          `UPDATE users SET stripe_customer_id = ? WHERE id = ?`,
+          [customerId, req.user.id]
+        );
+      }
+
+      const session = await stripe.checkout.sessions.create({
+        customer: customerId,
+        payment_method_types: ["card"],
+        mode: "subscription",
+        line_items: [
+          {
+            price: STRIPE_PRICE_ID,
+            quantity: 1
+          }
+        ],
+        success_url: "http://localhost:3000/success",
+        cancel_url: "http://localhost:3000/cancel"
+      });
+
+      res.json({ url: session.url });
+
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: "Stripe checkout failed" });
+    }
   }
+);
 
-  try {
-    const response = await axios.get(`${BALL_BASE}/stats`, {
-      params: {
-        "player_ids[]": playerId,
-        per_page: 10
-      },
-      headers: { Authorization: BALL_KEY }
-    });
+/* =================================================
+   EV ENGINE
+================================================= */
 
-    const games = response.data?.data || [];
+function calculateEV(prob, americanOdds) {
+  let implied;
 
-    playerStatsCache[playerId] = {
-      timestamp: now,
-      data: games
+  if (americanOdds < 0)
+    implied = Math.abs(americanOdds) / (Math.abs(americanOdds) + 100);
+  else
+    implied = 100 / (americanOdds + 100);
+
+  const decimal =
+    americanOdds < 0
+      ? 100 / Math.abs(americanOdds)
+      : americanOdds / 100;
+
+  const ev = (prob * decimal) - (1 - prob);
+
+  return {
+    impliedProbability: +(implied * 100).toFixed(1),
+    expectedValue: +ev.toFixed(3)
+  };
+}
+
+/* =================================================
+   PREMIUM EDGES ROUTE
+================================================= */
+
+app.get(
+  "/api/edges/premium",
+  authenticateUser,
+  requirePremium,
+  async (req, res) => {
+
+    const vegasOdds = -110;
+    const probability = 0.55;
+
+    const ev = calculateEV(probability, vegasOdds);
+
+    const samplePlay = {
+      player: "Sample Player",
+      stat: "Points",
+      line: 24.5,
+      direction: "OVER",
+      probability: 55,
+      vegasOdds,
+      impliedProbability: ev.impliedProbability,
+      expectedValue: ev.expectedValue
     };
 
-    return games;
-
-  } catch (err) {
-    console.log("BallDontLie error:", err.message);
-    return null;
-  }
-}
-
-/* =================================================
-   HELPERS
-================================================= */
-
-function normalizeName(name) {
-  if (!name) return null;
-  return name
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/\./g, "")
-    .replace(/'/g, "")
-    .trim();
-}
-
-function getStatKey(stat) {
-  const s = stat.toLowerCase();
-  if (s.includes("point")) return "pts";
-  if (s.includes("rebound")) return "reb";
-  if (s.includes("assist")) return "ast";
-  return null;
-}
-
-/* =================================================
-   EDGE ENGINE
-================================================= */
-
-async function buildEdges(projections = [], included = []) {
-
-  const players = {};
-  const includedMap = {};
-
-  included.forEach(item => {
-    if (item?.type && item?.id) {
-      includedMap[`${item.type}-${item.id}`] = item;
-    }
-  });
-
-  for (const proj of projections) {
-    try {
-
-      const attr = proj?.attributes;
-      const rel = proj?.relationships?.new_player?.data;
-      if (!attr || !rel) continue;
-
-      const playerObj = includedMap[`${rel.type}-${rel.id}`];
-      if (!playerObj) continue;
-
-      const playerName = normalizeName(playerObj?.attributes?.name);
-      const teamCode = playerObj?.attributes?.team?.toLowerCase();
-      const line = attr?.line_score;
-      const stat = attr?.stat_type;
-
-      if (!playerName || !teamCode || !line || !stat) continue;
-
-      let probability = 0.5;
-      const playerId = PLAYER_ID_MAP[playerName];
-
-      if (playerId) {
-        const games = await fetchLast10Games(playerId);
-        const statKey = getStatKey(stat);
-
-        if (games?.length && statKey) {
-          let overs = 0;
-          games.forEach(g => {
-            if (g[statKey] > line) overs++;
-          });
-
-          const hitRate = overs / games.length;
-          probability = (hitRate * 0.85) + 0.075;
-        }
-      }
-
-      /* ===== OVER / UNDER DETECTION ===== */
-
-      let overProb = probability;
-      let underProb = 1 - overProb;
-
-      let overEdge = (overProb - 0.5) * 100;
-      let underEdge = (underProb - 0.5) * 100;
-
-      let finalDirection = "OVER";
-      let finalProb = overProb;
-      let finalEdge = overEdge;
-
-      if (Math.abs(underEdge) > Math.abs(overEdge)) {
-        finalDirection = "UNDER";
-        finalProb = underProb;
-        finalEdge = underEdge;
-      }
-
-      if (!players[playerName]) {
-        players[playerName] = {
-          player: playerName,
-          playerId: playerId || null,
-          team: teamCode,
-          props: []
-        };
-      }
-
-      const propObj = {
-        stat,
-        line,
-        direction: finalDirection,
-        probability: +(finalProb * 100).toFixed(1),
-        edge: +finalEdge.toFixed(2)
-      };
-
-      players[playerName].props.push(propObj);
-
-      if (propObj.edge >= 15) {
-        await sendDiscordAlert(players[playerName], propObj);
-      }
-
-    } catch {
-      console.log("⚠️ Skipped projection");
-    }
-  }
-
-  return Object.values(players);
-}
-
-/* =================================================
-   ROUTES
-================================================= */
-
-app.get("/api/edges/today", async (req, res) => {
-  try {
-
-    const slate = await fetchPrizePicks();
-    const players = await buildEdges(
-      slate?.data || [],
-      slate?.included || []
-    );
-
-    let allProps = [];
-
-    players.forEach(p => {
-      p.props.forEach(prop => {
-        allProps.push({ player: p.player, team: p.team, ...prop });
-      });
-    });
-
-    allProps.sort((a,b) => Math.abs(b.edge) - Math.abs(a.edge));
-    const bestThree = allProps.slice(0,3);
-
     res.json({
-      meta: {
-        generatedAt: new Date().toISOString(),
-        modelVersion: "7.0.0",
-        totalPlayers: players.length
-      },
-      bestThree,
-      games: [],
-      players
+      bestThree: [samplePlay],
+      players: [samplePlay]
     });
-
-  } catch (err) {
-    console.log("Route error:", err.message);
-    res.status(500).json({ error: "Projection data unavailable" });
   }
-});
-
-/* ===== Record Result ===== */
-
-app.post("/api/result", (req, res) => {
-
-  const { outcome } = req.body;
-
-  if (outcome === "win") modelPerformance.wins++;
-  if (outcome === "loss") modelPerformance.losses++;
-
-  res.json({
-    message: "Result recorded",
-    performance: {
-      ...modelPerformance,
-      winRate:
-        modelPerformance.total > 0
-          ? ((modelPerformance.wins / modelPerformance.total) * 100).toFixed(1) + "%"
-          : "0%"
-    }
-  });
-});
+);
 
 /* =================================================
-   STATIC
+   START SERVER
 ================================================= */
-
-app.use(express.static(__dirname));
-
-app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "index.html"));
-});
 
 app.listen(PORT, () => {
-  console.log(`🚀 BeatsEdge running on ${PORT}`);
+  console.log(`🚀 BeatsEdge running on port ${PORT}`);
 });
