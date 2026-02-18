@@ -49,6 +49,10 @@ db.serialize(() => {
 ================================================= */
 
 app.use(express.json());
+app.use(express.static("public"));
+const path = require("path");
+
+app.use(express.static(path.join(__dirname, "public")));
 
 /* =================================================
    AUTH ROUTES
@@ -237,10 +241,6 @@ app.get("/api/edges/premium", (req, res) => {
 /* =================================================
    HEALTH CHECK
 ================================================= */
-
-app.get("/", (req, res) => {
-  res.json({ status: "BeatsEdge API live" });
-});
 
 /* =================================================
    START SERVER
