@@ -1,5 +1,12 @@
+/**************************************************
+ * BeatsEdge Server
+ * Stable Foundation Build
+ **************************************************/
+
 require("dotenv").config();
+
 const express = require("express");
+const path = require("path");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 const sqlite3 = require("sqlite3").verbose();
@@ -11,14 +18,15 @@ const app = express();
    ENV
 ================================================= */
 
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || "dev_secret";
-const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || "";
-const STRIPE_PRICE_ID = process.env.STRIPE_PRICE_ID || "";
-const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || "";
+
+/* Stripe (optional for now) */
+const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || null;
+const STRIPE_PRICE_ID = process.env.STRIPE_PRICE_ID || null;
 
 /* =================================================
-   STRIPE INIT (only if key exists)
+   STRIPE INIT (SAFE)
 ================================================= */
 
 let stripe = null;
@@ -45,14 +53,40 @@ db.serialize(() => {
 });
 
 /* =================================================
-   JSON PARSER
+   MIDDLEWARE
 ================================================= */
 
 app.use(express.json());
-app.use(express.static("public"));
-const path = require("path");
-
 app.use(express.static(path.join(__dirname, "public")));
+
+/* =================================================
+   AUTH HELPERS
+================================================= */
+
+function authenticateUser(req, res, next) {
+  const header = req.headers.authorization;
+  if (!header) return res.status(401).json({ error: "No token provided" });
+
+  const token = header.split(" ")[1];
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+
+    db.get(
+      `SELECT * FROM users WHERE id = ?`,
+      [decoded.id],
+      (err, user) => {
+        if (!user) {
+          return res.status(401).json({ error: "User not found" });
+        }
+        req.user = user;
+        next();
+      }
+    );
+  } catch {
+    return res.status(403).json({ error: "Invalid token" });
+  }
+}
 
 /* =================================================
    AUTH ROUTES
@@ -60,7 +94,6 @@ app.use(express.static(path.join(__dirname, "public")));
 
 app.post("/api/auth/register", async (req, res) => {
   const { email, password } = req.body;
-
   if (!email || !password)
     return res.status(400).json({ error: "Missing fields" });
 
@@ -113,42 +146,13 @@ app.post("/api/auth/login", (req, res) => {
 });
 
 /* =================================================
-   AUTH MIDDLEWARE (kept for later)
-================================================= */
-
-function authenticateUser(req, res, next) {
-  const header = req.headers.authorization;
-  if (!header)
-    return res.status(401).json({ error: "No token provided" });
-
-  const token = header.split(" ")[1];
-
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-
-    db.get(
-      `SELECT * FROM users WHERE id = ?`,
-      [decoded.id],
-      (err, user) => {
-        if (!user)
-          return res.status(401).json({ error: "User not found" });
-
-        req.user = user;
-        next();
-      }
-    );
-  } catch {
-    return res.status(403).json({ error: "Invalid token" });
-  }
-}
-
-/* =================================================
-   STRIPE CHECKOUT (Optional – still protected)
+   STRIPE CHECKOUT (READY, NOT BLOCKING)
 ================================================= */
 
 app.post("/api/stripe/create-checkout", authenticateUser, async (req, res) => {
-  if (!stripe)
+  if (!stripe || !STRIPE_PRICE_ID) {
     return res.status(500).json({ error: "Stripe not configured" });
+  }
 
   try {
     let customerId = req.user.stripe_customer_id;
@@ -157,7 +161,6 @@ app.post("/api/stripe/create-checkout", authenticateUser, async (req, res) => {
       const customer = await stripe.customers.create({
         email: req.user.email
       });
-
       customerId = customer.id;
 
       db.run(
@@ -169,16 +172,12 @@ app.post("/api/stripe/create-checkout", authenticateUser, async (req, res) => {
     const session = await stripe.checkout.sessions.create({
       customer: customerId,
       mode: "subscription",
-      payment_method_types: ["card"],
       line_items: [{ price: STRIPE_PRICE_ID, quantity: 1 }],
-      success_url:
-        "https://beatsedge-api-production-9337.up.railway.app/success",
-      cancel_url:
-        "https://beatsedge-api-production-9337.up.railway.app/cancel"
+      success_url: "https://beatsedge-api-production-9337.up.railway.app",
+      cancel_url: "https://beatsedge-api-production-9337.up.railway.app"
     });
 
     res.json({ url: session.url });
-
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Stripe checkout failed" });
@@ -192,17 +191,18 @@ app.post("/api/stripe/create-checkout", authenticateUser, async (req, res) => {
 function calculateEV(prob, americanOdds) {
   let implied;
 
-  if (americanOdds < 0)
+  if (americanOdds < 0) {
     implied = Math.abs(americanOdds) / (Math.abs(americanOdds) + 100);
-  else
+  } else {
     implied = 100 / (americanOdds + 100);
+  }
 
   const decimal =
     americanOdds < 0
       ? 100 / Math.abs(americanOdds)
       : americanOdds / 100;
 
-  const ev = (prob * decimal) - (1 - prob);
+  const ev = prob * decimal - (1 - prob);
 
   return {
     impliedProbability: +(implied * 100).toFixed(1),
@@ -211,17 +211,16 @@ function calculateEV(prob, americanOdds) {
 }
 
 /* =================================================
-   EDGES ROUTE (OPEN FOR TESTING)
+   EDGES ROUTE (OPEN FOR LIVE TESTING)
 ================================================= */
 
 app.get("/api/edges/premium", (req, res) => {
-
   const vegasOdds = -110;
   const probability = 0.55;
 
   const ev = calculateEV(probability, vegasOdds);
 
-  const samplePlay = {
+  const play = {
     player: "Sample Player",
     stat: "Points",
     line: 24.5,
@@ -233,14 +232,18 @@ app.get("/api/edges/premium", (req, res) => {
   };
 
   res.json({
-    bestThree: [samplePlay],
-    players: [samplePlay]
+    bestThree: [play],
+    players: [play]
   });
 });
 
 /* =================================================
    HEALTH CHECK
 ================================================= */
+
+app.get("/api/health", (req, res) => {
+  res.json({ status: "BeatsEdge API live" });
+});
 
 /* =================================================
    START SERVER
