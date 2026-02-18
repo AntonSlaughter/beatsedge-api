@@ -8,23 +8,23 @@ const Stripe = require("stripe");
 const app = express();
 
 /* =================================================
-   ENV VALIDATION
+   ENV
 ================================================= */
 
-const {
-  PORT = 8080,
-  JWT_SECRET,
-  STRIPE_SECRET_KEY,
-  STRIPE_PRICE_ID,
-  STRIPE_WEBHOOK_SECRET
-} = process.env;
+const PORT = process.env.PORT || 8080;
+const JWT_SECRET = process.env.JWT_SECRET || "dev_secret";
+const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || "";
+const STRIPE_PRICE_ID = process.env.STRIPE_PRICE_ID || "";
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || "";
 
-if (!JWT_SECRET) throw new Error("JWT_SECRET missing");
-if (!STRIPE_SECRET_KEY) throw new Error("STRIPE_SECRET_KEY missing");
-if (!STRIPE_PRICE_ID) throw new Error("STRIPE_PRICE_ID missing");
-if (!STRIPE_WEBHOOK_SECRET) throw new Error("STRIPE_WEBHOOK_SECRET missing");
+/* =================================================
+   STRIPE INIT (only if key exists)
+================================================= */
 
-const stripe = new Stripe(STRIPE_SECRET_KEY);
+let stripe = null;
+if (STRIPE_SECRET_KEY) {
+  stripe = new Stripe(STRIPE_SECRET_KEY);
+}
 
 /* =================================================
    DATABASE
@@ -45,57 +45,7 @@ db.serialize(() => {
 });
 
 /* =================================================
-   STRIPE WEBHOOK (RAW BODY REQUIRED)
-================================================= */
-
-app.post(
-  "/api/stripe/webhook",
-  express.raw({ type: "application/json" }),
-  (req, res) => {
-    const sig = req.headers["stripe-signature"];
-
-    let event;
-    try {
-      event = stripe.webhooks.constructEvent(
-        req.body,
-        sig,
-        STRIPE_WEBHOOK_SECRET
-      );
-    } catch (err) {
-      console.error("Webhook verification failed:", err.message);
-      return res.status(400).send(`Webhook Error: ${err.message}`);
-    }
-
-    if (event.type === "checkout.session.completed") {
-      const session = event.data.object;
-
-      db.run(
-        `UPDATE users SET subscription = 'premium'
-         WHERE stripe_customer_id = ?`,
-        [session.customer]
-      );
-
-      console.log("User upgraded to premium");
-    }
-
-    if (event.type === "customer.subscription.deleted") {
-      const subscription = event.data.object;
-
-      db.run(
-        `UPDATE users SET subscription = 'free'
-         WHERE stripe_customer_id = ?`,
-        [subscription.customer]
-      );
-
-      console.log("User downgraded to free");
-    }
-
-    res.json({ received: true });
-  }
-);
-
-/* =================================================
-   JSON PARSER (AFTER WEBHOOK)
+   JSON PARSER
 ================================================= */
 
 app.use(express.json());
@@ -105,36 +55,32 @@ app.use(express.json());
 ================================================= */
 
 app.post("/api/auth/register", async (req, res) => {
-  try {
-    const { email, password } = req.body;
+  const { email, password } = req.body;
 
-    if (!email || !password)
-      return res.status(400).json({ error: "Missing fields" });
+  if (!email || !password)
+    return res.status(400).json({ error: "Missing fields" });
 
-    const hashed = await bcrypt.hash(password, 10);
+  const hashed = await bcrypt.hash(password, 10);
 
-    db.run(
-      `INSERT INTO users (email, password) VALUES (?, ?)`,
-      [email, hashed],
-      function (err) {
-        if (err)
-          return res.status(400).json({ error: "User already exists" });
+  db.run(
+    `INSERT INTO users (email, password) VALUES (?, ?)`,
+    [email, hashed],
+    function (err) {
+      if (err)
+        return res.status(400).json({ error: "User already exists" });
 
-        const token = jwt.sign(
-          { id: this.lastID, email },
-          JWT_SECRET,
-          { expiresIn: "7d" }
-        );
+      const token = jwt.sign(
+        { id: this.lastID, email },
+        JWT_SECRET,
+        { expiresIn: "7d" }
+      );
 
-        res.json({
-          message: "User registered",
-          token
-        });
-      }
-    );
-  } catch (err) {
-    res.status(500).json({ error: "Registration failed" });
-  }
+      res.json({
+        message: "User registered",
+        token
+      });
+    }
+  );
 });
 
 app.post("/api/auth/login", (req, res) => {
@@ -163,12 +109,11 @@ app.post("/api/auth/login", (req, res) => {
 });
 
 /* =================================================
-   AUTH MIDDLEWARE
+   AUTH MIDDLEWARE (kept for later)
 ================================================= */
 
 function authenticateUser(req, res, next) {
   const header = req.headers.authorization;
-
   if (!header)
     return res.status(401).json({ error: "No token provided" });
 
@@ -193,83 +138,109 @@ function authenticateUser(req, res, next) {
   }
 }
 
-function requirePremium(req, res, next) {
-  if (req.user.subscription !== "premium")
-    return res.status(403).json({ error: "Premium required" });
+/* =================================================
+   STRIPE CHECKOUT (Optional – still protected)
+================================================= */
 
-  next();
+app.post("/api/stripe/create-checkout", authenticateUser, async (req, res) => {
+  if (!stripe)
+    return res.status(500).json({ error: "Stripe not configured" });
+
+  try {
+    let customerId = req.user.stripe_customer_id;
+
+    if (!customerId) {
+      const customer = await stripe.customers.create({
+        email: req.user.email
+      });
+
+      customerId = customer.id;
+
+      db.run(
+        `UPDATE users SET stripe_customer_id = ? WHERE id = ?`,
+        [customerId, req.user.id]
+      );
+    }
+
+    const session = await stripe.checkout.sessions.create({
+      customer: customerId,
+      mode: "subscription",
+      payment_method_types: ["card"],
+      line_items: [{ price: STRIPE_PRICE_ID, quantity: 1 }],
+      success_url:
+        "https://beatsedge-api-production-9337.up.railway.app/success",
+      cancel_url:
+        "https://beatsedge-api-production-9337.up.railway.app/cancel"
+    });
+
+    res.json({ url: session.url });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Stripe checkout failed" });
+  }
+});
+
+/* =================================================
+   EV ENGINE
+================================================= */
+
+function calculateEV(prob, americanOdds) {
+  let implied;
+
+  if (americanOdds < 0)
+    implied = Math.abs(americanOdds) / (Math.abs(americanOdds) + 100);
+  else
+    implied = 100 / (americanOdds + 100);
+
+  const decimal =
+    americanOdds < 0
+      ? 100 / Math.abs(americanOdds)
+      : americanOdds / 100;
+
+  const ev = (prob * decimal) - (1 - prob);
+
+  return {
+    impliedProbability: +(implied * 100).toFixed(1),
+    expectedValue: +ev.toFixed(3)
+  };
 }
 
 /* =================================================
-   STRIPE CHECKOUT
+   EDGES ROUTE (OPEN FOR TESTING)
 ================================================= */
 
-app.post(
-  "/api/stripe/create-checkout",
-  authenticateUser,
-  async (req, res) => {
-    try {
-      let customerId = req.user.stripe_customer_id;
+app.get("/api/edges/premium", (req, res) => {
 
-      if (!customerId) {
-        const customer = await stripe.customers.create({
-          email: req.user.email
-        });
+  const vegasOdds = -110;
+  const probability = 0.55;
 
-        customerId = customer.id;
+  const ev = calculateEV(probability, vegasOdds);
 
-        db.run(
-          `UPDATE users SET stripe_customer_id = ? WHERE id = ?`,
-          [customerId, req.user.id]
-        );
-      }
+  const samplePlay = {
+    player: "Sample Player",
+    stat: "Points",
+    line: 24.5,
+    direction: "OVER",
+    probability: 55,
+    vegasOdds,
+    impliedProbability: ev.impliedProbability,
+    expectedValue: ev.expectedValue
+  };
 
-      const session = await stripe.checkout.sessions.create({
-        customer: customerId,
-        mode: "subscription",
-        payment_method_types: ["card"],
-        line_items: [{ price: STRIPE_PRICE_ID, quantity: 1 }],
-        success_url:
-          "https://beatsedge-api-production-9337.up.railway.app/success",
-        cancel_url:
-          "https://beatsedge-api-production-9337.up.railway.app/cancel"
-      });
-
-      res.json({ url: session.url });
-
-    } catch (err) {
-      console.error(err);
-      res.status(500).json({ error: "Stripe checkout failed" });
-    }
-  }
-);
+  res.json({
+    bestThree: [samplePlay],
+    players: [samplePlay]
+  });
+});
 
 /* =================================================
-   PREMIUM EV ROUTE
+   HEALTH CHECK
 ================================================= */
 
-app.get(
-  "/api/edges/premium",
-  authenticateUser,
-  (req, res) => {
-
-    const samplePlay = {
-      player: "Sample Player",
-      stat: "Points",
-      line: 24.5,
-      direction: "OVER",
-      probability: 55,
-      vegasOdds: -110,
-      impliedProbability: 52.4,
-      expectedValue: 0.048
-    };
-
-    res.json({
-      bestThree: [samplePlay],
-      players: [samplePlay]
-    });
-  }
-);
+app.get("/", (req, res) => {
+  res.json({ status: "BeatsEdge API live" });
+});
 
 /* =================================================
    START SERVER
