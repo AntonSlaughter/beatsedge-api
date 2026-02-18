@@ -92,97 +92,110 @@ function calculateEV(prob, americanOdds) {
 app.get("/api/edges/premium", async (req, res) => {
   try {
 
-    if (!BALLDONTLIE_KEY) {
-      return res.status(500).json({ error: "BALLDONTLIE_API_KEY missing" });
+    const oddsKey = process.env.ODDS_API_KEY;
+    const statsKey = process.env.BALLDONTLIE_API_KEY;
+
+    if (!oddsKey || !statsKey) {
+      return res.status(500).json({ error: "Missing API keys" });
     }
 
-    const today = new Date().toISOString().split("T")[0];
-
-    // 1️⃣ Get today's games
-    const gamesRes = await axios.get(
-      `https://api.balldontlie.io/v1/games?dates[]=${today}`,
+    // 1️⃣ Pull upcoming NBA props
+    const oddsRes = await axios.get(
+      `https://api.the-odds-api.com/v4/sports/basketball_nba/odds`,
       {
-        headers: { Authorization: BALLDONTLIE_KEY }
+        params: {
+          apiKey: oddsKey,
+          regions: "us",
+          markets: "player_points",
+          oddsFormat: "american"
+        }
       }
     );
 
-    const games = gamesRes.data.data;
-    if (!games.length) {
-      return res.json({ bestThree: [], players: [] });
-    }
+    const games = oddsRes.data;
 
-    let players = [];
+    let edges = [];
 
-    // Limit games for speed
-    for (let game of games.slice(0, 2)) {
+    for (let game of games.slice(0, 3)) {
 
-      const statsRes = await axios.get(
-        `https://api.balldontlie.io/v1/stats?game_ids[]=${game.id}&per_page=50`,
-        {
-          headers: { Authorization: BALLDONTLIE_KEY }
-        }
-      );
+      for (let book of game.bookmakers || []) {
 
-      const stats = statsRes.data.data;
+        for (let market of book.markets || []) {
 
-      for (let stat of stats.slice(0, 8)) {
+          for (let outcome of market.outcomes || []) {
 
-        const playerId = stat.player.id;
-        const fullName =
-          stat.player.first_name + " " + stat.player.last_name;
+            const playerName = outcome.description;
+            const line = outcome.point;
+            const americanOdds = outcome.price;
 
-        const historyRes = await axios.get(
-          `https://api.balldontlie.io/v1/stats?player_ids[]=${playerId}&per_page=10`,
-          {
-            headers: { Authorization: BALLDONTLIE_KEY }
+            if (!playerName || !line || !americanOdds) continue;
+
+            // 2️⃣ Find player ID from BallDontLie
+            const searchRes = await axios.get(
+              `https://api.balldontlie.io/v1/players`,
+              {
+                params: { search: playerName },
+                headers: { Authorization: statsKey }
+              }
+            );
+
+            if (!searchRes.data.data.length) continue;
+
+            const playerId = searchRes.data.data[0].id;
+
+            // 3️⃣ Get last 10 games
+            const historyRes = await axios.get(
+              `https://api.balldontlie.io/v1/stats`,
+              {
+                params: {
+                  player_ids: [playerId],
+                  per_page: 10
+                },
+                headers: { Authorization: statsKey }
+              }
+            );
+
+            const history = historyRes.data.data;
+            if (!history.length) continue;
+
+            const points = history.map(g => g.pts || 0);
+
+            const avg =
+              points.reduce((a, b) => a + b, 0) /
+              points.length;
+
+            const hits =
+              points.filter(p => p > line).length;
+
+            const probability = hits / points.length;
+
+            const evData = calculateEV(probability, americanOdds);
+
+            edges.push({
+              player: playerName,
+              stat: "Points",
+              line,
+              direction: outcome.name,
+              probability: Math.round(probability * 100),
+              vegasOdds: americanOdds,
+              impliedProbability: evData.impliedProbability,
+              expectedValue: evData.expectedValue
+            });
           }
-        );
-
-        const history = historyRes.data.data;
-        if (!history.length) continue;
-
-        const pointsList = history.map(g => g.pts || 0);
-
-        const avg =
-          pointsList.reduce((a, b) => a + b, 0) /
-          pointsList.length;
-
-        const line = +(avg - 1.5).toFixed(1);
-
-        const hits =
-          pointsList.filter(p => p > line).length;
-
-        const probability = hits / pointsList.length;
-
-        const vegasOdds = -110;
-
-        const evData = calculateEV(probability, vegasOdds);
-
-        players.push({
-          player: fullName,
-          stat: "Points",
-          line,
-          direction: "OVER",
-          probability: Math.round(probability * 100),
-          vegasOdds,
-          impliedProbability: evData.impliedProbability,
-          expectedValue: evData.expectedValue
-        });
+        }
       }
     }
 
-    players.sort((a, b) => b.expectedValue - a.expectedValue);
-
-    const bestThree = players.slice(0, 3);
+    edges.sort((a, b) => b.expectedValue - a.expectedValue);
 
     res.json({
-      bestThree,
-      players
+      bestThree: edges.slice(0, 3),
+      players: edges
     });
 
   } catch (err) {
-    console.error("Live engine error:", err.message);
-    res.status(500).json({ error: "Live data fetch failed" });
+    console.error("Odds engine error:", err.message);
+    res.status(500).json({ error: "Odds engine failed" });
   }
 });
 
