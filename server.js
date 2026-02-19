@@ -1,5 +1,5 @@
 /**************************************************
- * BeatsEdge Server - Live Engine Build
+ * BeatsEdge Server - Clean Production Build
  **************************************************/
 
 require("dotenv").config();
@@ -20,13 +20,15 @@ const app = express();
 
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || "dev_secret";
-const BALLDONTLIE_KEY = process.env.BALLDONTLIE_API_KEY || null;
+
+const ODDS_API_KEY = process.env.ODDS_API_KEY || null;
+const BALLDONTLIE_API_KEY = process.env.BALLDONTLIE_API_KEY || null;
+const SPORTRADAR_API_KEY = process.env.SPORTRADAR_API_KEY || null;
 
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || null;
-const STRIPE_PRICE_ID = process.env.STRIPE_PRICE_ID || null;
 
 /* =================================================
-   STRIPE INIT
+   STRIPE (SAFE INIT)
 ================================================= */
 
 let stripe = null;
@@ -63,7 +65,7 @@ app.use(express.static(path.join(__dirname, "public")));
    EV CALCULATION
 ================================================= */
 
-function calculateEV(prob, americanOdds) {
+function calculateEV(probabilityDecimal, americanOdds) {
   let implied;
 
   if (americanOdds < 0) {
@@ -72,12 +74,14 @@ function calculateEV(prob, americanOdds) {
     implied = 100 / (americanOdds + 100);
   }
 
-  const decimal =
+  const decimalOdds =
     americanOdds < 0
       ? 100 / Math.abs(americanOdds)
       : americanOdds / 100;
 
-  const ev = prob * decimal - (1 - prob);
+  const ev =
+    probabilityDecimal * decimalOdds -
+    (1 - probabilityDecimal);
 
   return {
     impliedProbability: +(implied * 100).toFixed(1),
@@ -86,25 +90,22 @@ function calculateEV(prob, americanOdds) {
 }
 
 /* =================================================
-   LIVE EDGES ROUTE
+   PREMIUM EDGE ENGINE
 ================================================= */
 
 app.get("/api/edges/premium", async (req, res) => {
   try {
-
-    const oddsKey = process.env.ODDS_API_KEY;
-    const statsKey = process.env.BALLDONTLIE_API_KEY;
-
-    if (!oddsKey || !statsKey) {
-      return res.status(500).json({ error: "Missing API keys" });
+    if (!ODDS_API_KEY || !BALLDONTLIE_API_KEY) {
+      return res.status(500).json({
+        error: "Missing ODDS_API_KEY or BALLDONTLIE_API_KEY"
+      });
     }
 
-    // 1️⃣ Pull upcoming NBA props
     const oddsRes = await axios.get(
-      `https://api.the-odds-api.com/v4/sports/basketball_nba/odds`,
+      "https://api.the-odds-api.com/v4/sports/basketball_nba/odds",
       {
         params: {
-          apiKey: oddsKey,
+          apiKey: ODDS_API_KEY,
           regions: "us",
           markets: "player_points",
           oddsFormat: "american"
@@ -113,15 +114,11 @@ app.get("/api/edges/premium", async (req, res) => {
     );
 
     const games = oddsRes.data;
-
     let edges = [];
 
     for (let game of games.slice(0, 3)) {
-
       for (let book of game.bookmakers || []) {
-
         for (let market of book.markets || []) {
-
           for (let outcome of market.outcomes || []) {
 
             const playerName = outcome.description;
@@ -130,12 +127,14 @@ app.get("/api/edges/premium", async (req, res) => {
 
             if (!playerName || !line || !americanOdds) continue;
 
-            // 2️⃣ Find player ID from BallDontLie
+            // Player search
             const searchRes = await axios.get(
-              `https://api.balldontlie.io/v1/players`,
+              "https://api.balldontlie.io/v1/players",
               {
                 params: { search: playerName },
-                headers: { Authorization: statsKey }
+                headers: {
+                  Authorization: BALLDONTLIE_API_KEY
+                }
               }
             );
 
@@ -143,15 +142,17 @@ app.get("/api/edges/premium", async (req, res) => {
 
             const playerId = searchRes.data.data[0].id;
 
-            // 3️⃣ Get last 10 games
+            // Last 10 games
             const historyRes = await axios.get(
-              `https://api.balldontlie.io/v1/stats`,
+              "https://api.balldontlie.io/v1/stats",
               {
                 params: {
                   player_ids: [playerId],
                   per_page: 10
                 },
-                headers: { Authorization: statsKey }
+                headers: {
+                  Authorization: BALLDONTLIE_API_KEY
+                }
               }
             );
 
@@ -194,19 +195,30 @@ app.get("/api/edges/premium", async (req, res) => {
     });
 
   } catch (err) {
-    console.error("Odds engine error:", err.message);
+    console.error("Odds engine error:", err.response?.data || err.message);
     res.status(500).json({ error: "Odds engine failed" });
   }
 });
+
+/* =================================================
+   SPORTRADAR SCHEDULE
+================================================= */
+
 app.get("/api/nba/schedule/:year/:month/:day", async (req, res) => {
   try {
+    if (!SPORTRADAR_API_KEY) {
+      return res.status(500).json({
+        error: "Missing SPORTRADAR_API_KEY"
+      });
+    }
+
     const { year, month, day } = req.params;
 
     const response = await axios.get(
       `https://api.sportradar.com/nba/trial/v8/en/games/${year}/${month}/${day}/schedule.json`,
       {
         params: {
-          api_key: process.env.SPORTRADAR_API_KEY
+          api_key: SPORTRADAR_API_KEY
         }
       }
     );
@@ -214,19 +226,30 @@ app.get("/api/nba/schedule/:year/:month/:day", async (req, res) => {
     res.json(response.data);
 
   } catch (err) {
-    console.error(err.response?.data || err.message);
+    console.error("Sportradar error:", err.response?.data || err.message);
     res.status(500).json({ error: "Sportradar failed" });
   }
 });
+
+/* =================================================
+   SPORTRADAR PLAYER PROFILE
+================================================= */
+
 app.get("/api/nba/player/:playerId", async (req, res) => {
   try {
+    if (!SPORTRADAR_API_KEY) {
+      return res.status(500).json({
+        error: "Missing SPORTRADAR_API_KEY"
+      });
+    }
+
     const { playerId } = req.params;
 
     const response = await axios.get(
       `https://api.sportradar.com/nba/trial/v8/en/players/${playerId}/profile.json`,
       {
         params: {
-          api_key: process.env.SPORTRADAR_API_KEY
+          api_key: SPORTRADAR_API_KEY
         }
       }
     );
@@ -235,7 +258,10 @@ app.get("/api/nba/player/:playerId", async (req, res) => {
 
   } catch (err) {
     console.error("Player fetch error:", err.response?.data || err.message);
-    res.status(500).json({ error: "Player fetch failed" });
+    res.status(500).json({
+      error: "Player fetch failed",
+      details: err.response?.data || err.message
+    });
   }
 });
 
