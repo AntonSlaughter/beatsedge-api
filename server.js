@@ -218,6 +218,26 @@ app.get("/api/nba/schedule/:year/:month/:day", async (req, res) => {
     res.status(500).json({ error: "Sportradar failed" });
   }
 });
+app.get("/api/nba/player/:playerId", async (req, res) => {
+  try {
+    const { playerId } = req.params;
+
+    const response = await axios.get(
+      `https://api.sportradar.com/nba/trial/v8/en/players/${playerId}/profile.json`,
+      {
+        params: {
+          api_key: process.env.SPORTRADAR_API_KEY
+        }
+      }
+    );
+
+    res.json(response.data);
+
+  } catch (err) {
+    console.error("Player fetch error:", err.response?.data || err.message);
+    res.status(500).json({ error: "Player fetch failed" });
+  }
+});
 
 /* =================================================
    HEALTH
