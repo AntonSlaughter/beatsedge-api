@@ -198,6 +198,26 @@ app.get("/api/edges/premium", async (req, res) => {
     res.status(500).json({ error: "Odds engine failed" });
   }
 });
+app.get("/api/nba/schedule/:year/:month/:day", async (req, res) => {
+  try {
+    const { year, month, day } = req.params;
+
+    const response = await axios.get(
+      `https://api.sportradar.com/nba/trial/v8/en/games/${year}/${month}/${day}/schedule.json`,
+      {
+        params: {
+          api_key: process.env.SPORTRADAR_API_KEY
+        }
+      }
+    );
+
+    res.json(response.data);
+
+  } catch (err) {
+    console.error(err.response?.data || err.message);
+    res.status(500).json({ error: "Sportradar failed" });
+  }
+});
 
 /* =================================================
    HEALTH
